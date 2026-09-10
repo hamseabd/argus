@@ -17,3 +17,12 @@ htmlcov/
 
 # Argus output
 argus-review.json
+
+# OS and editors
+.DS_Store
+.vscode/
+.idea/
+
+# Other tool caches and logs
+.mypy_cache/
+*.log
