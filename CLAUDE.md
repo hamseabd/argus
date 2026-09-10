@@ -5,7 +5,7 @@
 Argus is a code-review agent built on the Claude Agent SDK (Python).
 It reviews a PR or a local diff with a lead reviewer plus three parallel read-only specialist subagents, verifies each finding with a second query, and posts inline GitHub review comments.
 It is a portfolio project: engineering quality and a readable architecture matter more than feature count.
-The design lives in `docs/superpowers/specs/2026-09-10-argus-design.md`; read it before changing behavior.
+The design spec and plans live locally under `docs/` and are not committed; read the spec before changing behavior.
 
 ## Stack
 
