@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local config and secrets
+.env
+.env.*
+.claude/settings.local.json
+
+# Argus output
+argus-review.json
+
+# OS and editors
+.DS_Store
+.vscode/
+.idea/
+
+# Other tool caches and logs
+.mypy_cache/
+*.log
+
+# Working documents (specs, plans) are kept local
+docs/
