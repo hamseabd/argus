@@ -26,3 +26,6 @@ argus-review.json
 # Other tool caches and logs
 .mypy_cache/
 *.log
+
+# Working documents kept local; only specs are committed
+docs/superpowers/plans/
