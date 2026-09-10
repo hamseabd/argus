@@ -6,7 +6,7 @@
 
 **Architecture:** Increment 0 is tooling only: a public GitHub repo, `uv`-managed Python 3.12 project, ruff, pytest, a `ci` workflow, and a Typer CLI with a `version` command. Increment 1 adds `argus/auth.py` (credential detection), a smoke script that runs one real `query()`, and a `workflow_dispatch` workflow that runs it in Actions with only `CLAUDE_CODE_OAUTH_TOKEN`. Later increments (2 to 7) get their own plan once this gate passes, because their exact SDK calls are confirmed here.
 
-**Tech Stack:** Python 3.12, uv, hatchling, Typer, pytest, ruff, claude-agent-sdk 0.2.152, GitHub Actions (`actions/checkout@v7`, `astral-sh/setup-uv@v10`), gh CLI.
+**Tech Stack:** Python 3.12, uv, hatchling, Typer, pytest, ruff, claude-agent-sdk 0.2.152, GitHub Actions (`actions/checkout@v7`, `astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1`), gh CLI.
 
 **Spec:** `docs/superpowers/specs/2026-09-10-argus-design.md` (sections 2, 4, 10, 11, 12, 19)
 
@@ -448,7 +448,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
       - name: Install
@@ -762,7 +762,7 @@ jobs:
         model: [claude-sonnet-5, claude-opus-5]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
       - name: Install
