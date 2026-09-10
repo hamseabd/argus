@@ -25,7 +25,7 @@ from argus.auth import credential_source
 MAGIC = "ARGUS_OK"
 
 
-async def run(model: str) -> int:
+async def run(model: str, max_budget_usd: float) -> int:
     source = credential_source()
     print(f"credential source: {source or 'none in env (machine login)'}", file=sys.stderr)
     options = ClaudeAgentOptions(
@@ -34,7 +34,8 @@ async def run(model: str) -> int:
         allowed_tools=[],
         permission_mode="dontAsk",
         max_turns=1,
-        max_budget_usd=0.10,
+        max_budget_usd=max_budget_usd,
+        stderr=lambda line: print(f"[cli] {line}", file=sys.stderr),
     )
     result: ResultMessage | None = None
     try:
@@ -76,8 +77,18 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--model", default="claude-sonnet-5", help="model id to exercise")
+    parser.add_argument(
+        "--max-budget-usd",
+        type=float,
+        default=1.0,
+        help=(
+            "abort if the run would exceed this. A cold-cache one-turn Opus reply costs "
+            "about $0.37 because the runtime sends ~25K tokens of tool definitions, so "
+            "the default must clear that."
+        ),
+    )
     args = parser.parse_args()
-    sys.exit(asyncio.run(run(args.model)))
+    sys.exit(asyncio.run(run(args.model, args.max_budget_usd)))
 
 
 if __name__ == "__main__":
