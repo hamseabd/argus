@@ -28,4 +28,5 @@ argus-review.json
 *.log
 
 # Working documents kept local; only specs are committed
-docs/superpowers/plans/
+docs
+/
