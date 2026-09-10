@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local config and secrets
+.env
+.env.*
+.claude/settings.local.json
+
+# Argus output
+argus-review.json
