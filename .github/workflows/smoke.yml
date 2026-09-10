@@ -2,6 +2,10 @@ name: sdk-smoke
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/sdk_smoke.py
+      - .github/workflows/smoke.yml
 
 permissions:
   contents: read
