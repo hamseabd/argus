@@ -20,7 +20,7 @@ import sys
 
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 
-from argus.auth import credential_source
+from argus.auth import credential_problem, credential_source
 
 MAGIC = "ARGUS_OK"
 
@@ -28,6 +28,9 @@ MAGIC = "ARGUS_OK"
 async def run(model: str, max_budget_usd: float) -> int:
     source = credential_source()
     print(f"credential source: {source or 'none in env (machine login)'}", file=sys.stderr)
+    if source is not None and (problem := credential_problem()) is not None:
+        print(json.dumps({"ok": False, "model": model, "error": problem}))
+        return 1
     options = ClaudeAgentOptions(
         model=model,
         system_prompt=f"You are a smoke test. Reply with exactly {MAGIC} and nothing else.",
@@ -51,6 +54,7 @@ async def run(model: str, max_budget_usd: float) -> int:
         print(json.dumps({"ok": False, "model": model, "subtype": "no_result"}))
         return 1
     ok = result.subtype == "success" and MAGIC in (result.result or "")
+    usage = result.usage or {}
     print(
         json.dumps(
             {
@@ -60,11 +64,9 @@ async def run(model: str, max_budget_usd: float) -> int:
                 "cost_usd": result.total_cost_usd,
                 "num_turns": result.num_turns,
                 "duration_ms": result.duration_ms,
-                "input_tokens": (result.usage or {}).get("input_tokens"),
-                "cache_creation_input_tokens": (result.usage or {}).get(
-                    "cache_creation_input_tokens"
-                ),
-                "output_tokens": (result.usage or {}).get("output_tokens"),
+                "input_tokens": usage.get("input_tokens"),
+                "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
                 "session_id": result.session_id,
             }
         )
