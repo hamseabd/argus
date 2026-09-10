@@ -27,6 +27,5 @@ argus-review.json
 .mypy_cache/
 *.log
 
-# Working documents kept local; only specs are committed
-docs
-/
+# Working documents (specs, plans) are kept local
+docs/
