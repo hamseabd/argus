@@ -1,15 +1,17 @@
 """Where Claude credentials come from.
 
 Argus never reads credentials itself; the Claude Agent SDK does.
-This module only reports which environment variable will supply them,
-so the CLI can fail early with a useful message and the smoke script can
-log which path it exercised.
+This module only reports which environment variable will supply them and
+whether the value looks usable, so the CLI can fail early with a useful
+message and the smoke script can log which path it exercised.
 """
 
 import os
 from collections.abc import Mapping
 
-CREDENTIAL_ENV_VARS: tuple[str, ...] = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+OAUTH_TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
+API_KEY_VAR = "ANTHROPIC_API_KEY"
+CREDENTIAL_ENV_VARS: tuple[str, ...] = (OAUTH_TOKEN_VAR, API_KEY_VAR)
 OAUTH_TOKEN_PREFIX = "sk-ant-oat"
 MIN_CREDENTIAL_LENGTH = 60
 
@@ -43,7 +45,7 @@ def credential_problem(env: Mapping[str, str] | None = None) -> str | None:
         return f"{name} has leading or trailing whitespace"
     if any(char.isspace() for char in value):
         return f"{name} contains whitespace inside the value"
-    if name == "CLAUDE_CODE_OAUTH_TOKEN" and not value.startswith(OAUTH_TOKEN_PREFIX):
+    if name == OAUTH_TOKEN_VAR and not value.startswith(OAUTH_TOKEN_PREFIX):
         return f"{name} should start with {OAUTH_TOKEN_PREFIX}"
     if len(value) < MIN_CREDENTIAL_LENGTH:
         return (
