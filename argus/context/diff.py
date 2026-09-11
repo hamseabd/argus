@@ -50,6 +50,11 @@ def parse_diff(text: str) -> list[FileDiff]:
     return [_parse_section(section) for section in _split_sections(text)]
 
 
+def diff_sections(text: str) -> dict[str, str]:
+    """Each file's verbatim section of the diff, by path."""
+    return {file.path: file.text for file in parse_diff(text)}
+
+
 def commentable_index(files: list[FileDiff]) -> dict[str, frozenset[int]]:
     """Map each path to the new-side lines a review comment may attach to."""
     return {f.path: f.commentable_lines for f in files}

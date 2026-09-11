@@ -8,7 +8,7 @@ to check.
 
 from importlib import resources
 
-from argus.context.diff import parse_diff
+from argus.context.diff import diff_sections as _diff_sections
 from argus.domain.models import ChangedFile, Finding, ReviewContext
 
 PROMPT_NAMES: tuple[str, ...] = ("lead", "correctness", "security", "quality", "verifier")
@@ -71,7 +71,7 @@ def verifier_user_prompt(finding: Finding, diff_section: str) -> str:
 
 def diff_sections(context: ReviewContext) -> dict[str, str]:
     """Each file's section of the diff by path; parse once, then look findings up."""
-    return {file.path: file.text for file in parse_diff(context.diff_text)}
+    return _diff_sections(context.diff_text)
 
 
 def finding_diff_section(sections: dict[str, str], finding: Finding) -> str:
