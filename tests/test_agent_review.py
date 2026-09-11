@@ -81,7 +81,7 @@ def test_review_runs_the_lead_and_returns_a_review_with_ids(tmp_path: Path) -> N
     assert outcome.session_id == "sess"
     prompt, options = recorder.calls[0]
     assert "app/repo.py" in prompt
-    assert options.model == "claude-sonnet-5"
+    assert options.model == "claude-opus-5"
     assert options.cwd == tmp_path
 
 

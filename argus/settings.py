@@ -21,8 +21,8 @@ LogLevel = Literal["debug", "info", "warning"]
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ARGUS_", extra="ignore")
 
-    lead_model: str = "claude-sonnet-5"
-    lead_effort: Effort = "medium"
+    lead_model: str = "claude-opus-5"
+    lead_effort: Effort = "high"
     lead_max_turns: int = Field(default=40, ge=1)
     lead_max_budget_usd: float = Field(default=3.0, gt=0)
 
