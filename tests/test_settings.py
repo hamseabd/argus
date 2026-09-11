@@ -8,8 +8,8 @@ from argus.settings import Settings
 def test_defaults_match_the_spec() -> None:
     s = Settings(_env_file=None)
 
-    assert s.lead_model == "claude-opus-5"
-    assert s.lead_effort == "high"
+    assert s.lead_model == "claude-sonnet-5"
+    assert s.lead_effort == "medium"
     assert s.lead_max_turns == 40
     assert s.lead_max_budget_usd == 3.0
     assert s.specialist_model == "claude-sonnet-5"

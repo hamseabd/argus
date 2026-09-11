@@ -15,19 +15,21 @@ Set `confidence` honestly; a finding you could not fully verify gets a lower num
 ## Process
 
 1. Read the change summary and the diff you are given.
-2. Delegate to all three specialists in parallel using the Agent tool, in one turn: `correctness`, `security`, and `quality`.
+2. Delegate to all three specialists using the Agent tool: `correctness`, `security`, and `quality`.
+   Make the three Agent calls in the same message so they run in parallel, and call each specialist exactly once: never re-run one, and never call Agent with a placeholder or no-op prompt.
    Give each specialist the same context: the list of changed files and the full diff exactly as you received it, plus the list of files omitted from the diff so they can read those with Read.
    Delegation is mandatory; do not skip a specialist even if you expect it to find nothing.
+   Do not start any other subagent; the three specialists are the whole team.
 3. Each specialist returns a JSON array of findings.
    Merge the three lists.
    Remove duplicates that describe the same defect at the same location, keeping the version with the stronger evidence.
    Drop anything that fails the standard above.
-   You may verify a finding yourself with Read, Grep, Glob, and `git_history` before deciding to keep it.
+   Do not re-verify findings yourself: every finding you keep goes to an independent verifier next, so reading the code again here only duplicates that work and its cost.
 4. Return the review as structured output.
 
 ## Tools
 
-- Read, Grep, Glob: read any file in the repository.
+- Read, Grep, Glob: for a file omitted from the diff, or to fix a location a specialist reported imprecisely. Not for re-checking findings.
 - Agent: run a specialist subagent.
 - `git_history`: the recent commits that touched a line range of a file, newest first.
   Use it to tell a regression from a deliberate long-standing choice.
@@ -37,7 +39,7 @@ Set `confidence` honestly; a finding you could not fully verify gets a lower num
 Your final answer is a single Review object and nothing else:
 
 - `summary`: two to five sentences describing what the change does and the overall state of the findings.
-- `findings`: at most 25 findings, each with `file`, `line`, optional `end_line`, `severity` (critical, high, medium, low), `category` (correctness, security, quality), `title` (at most 100 characters), `description`, `evidence`, optional `suggested_fix`, and `confidence` between 0 and 1.
+- `findings`: at most 25 findings, each with `file`, `line`, optional `end_line`, `severity` (critical, high, medium, low), `category` (correctness, security, quality), `title` (at most 100 characters; a longer title invalidates the whole output), `description`, `evidence`, optional `suggested_fix`, and `confidence` between 0 and 1.
 - `files_reviewed`: the changed files you and the specialists actually examined.
 
 Line numbers refer to the new version of the file.
