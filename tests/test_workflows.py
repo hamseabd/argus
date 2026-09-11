@@ -47,13 +47,28 @@ def test_review_skips_drafts_and_fork_pull_requests() -> None:
     assert "head.repo.full_name == github.repository" in condition
 
 
-def test_argus_runs_from_the_default_branch_and_only_reads_the_pr_head() -> None:
+def test_review_can_be_called_from_another_repository() -> None:
+    call = load("review.yml")["on"]["workflow_call"]
+
+    assert call["secrets"]["CLAUDE_CODE_OAUTH_TOKEN"]["required"] is True
+    assert list(call["inputs"]) == ["pr"]  # only for callers not running on a pull_request event
+    assert call["inputs"]["pr"]["required"] is False
+
+
+def test_argus_runs_from_a_trusted_ref_and_only_reads_the_pr_head() -> None:
     checkouts = [
         s for s in steps("review.yml", "review") if "actions/checkout@" in s.get("uses", "")
     ]
     trusted, target = checkouts
 
-    assert trusted["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    # Here: the default branch, never the pull request's code. Called from
+    # another repository: this workflow's own pinned commit. The job.* fields
+    # describe the called workflow file (verified against a live run).
+    assert trusted["with"]["repository"] == "${{ job.workflow_repository }}"
+    assert trusted["with"]["ref"] == (
+        "${{ github.repository != job.workflow_repository && job.workflow_sha"
+        " || github.event.repository.default_branch }}"
+    )
     assert "path" not in trusted["with"]
     assert target["with"]["path"] == "target"
     assert "head.sha" in target["with"]["ref"]
