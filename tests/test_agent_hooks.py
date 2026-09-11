@@ -118,6 +118,21 @@ def test_post_tool_use_counts_calls_and_failures() -> None:
 
     assert state.tool_calls == 1
     assert state.tool_failures == 1
+    assert state.output_rejections == 0
+
+
+def test_rejected_structured_outputs_are_counted_separately() -> None:
+    state = HookState()
+    failed = build_hooks(state)["PostToolUseFailure"][0].hooks[0]
+    rejected = hook_input(
+        "StructuredOutput", "PostToolUseFailure", error="Output does not match required schema"
+    )
+
+    asyncio.run(failed(rejected, None, {"signal": None}))
+    asyncio.run(failed(rejected, None, {"signal": None}))
+
+    assert state.output_rejections == 2
+    assert state.tool_failures == 2
 
 
 def test_build_hooks_registers_the_expected_events_and_matchers() -> None:

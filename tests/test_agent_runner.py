@@ -59,7 +59,7 @@ async def run(runner: SdkRunner, state: HookState | None = None) -> RunResult:
 
 
 def test_success_returns_structured_output_and_metrics() -> None:
-    state = HookState(subagents_started=3)
+    state = HookState(subagents_started=3, output_rejections=2)
     out = asyncio_run(
         run(runner_for([AssistantMessage(content=[TextBlock("hi")], model="m"), result()]), state)
     )
@@ -77,6 +77,7 @@ def test_success_returns_structured_output_and_metrics() -> None:
     assert m.num_turns == 3
     assert m.duration_ms == 1200
     assert m.subagents_run == 3
+    assert m.output_rejections == 2
 
 
 def test_error_subtype_raises_agent_run_error_with_cost_and_session() -> None:

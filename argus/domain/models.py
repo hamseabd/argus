@@ -121,6 +121,9 @@ class StageMetrics(_Model):
     num_turns: int = Field(ge=0)
     duration_ms: int = Field(ge=0)
     subagents_run: int = Field(default=0, ge=0, description="Review stage only.")
+    output_rejections: int = Field(
+        default=0, ge=0, description="Structured outputs the SDK rejected before one validated."
+    )
 
 
 class ReviewResult(_Model):

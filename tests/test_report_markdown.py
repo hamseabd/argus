@@ -39,6 +39,16 @@ def result(findings: list[Finding], verdicts: list[Verdict] | None = None) -> Re
     )
 
 
+def test_footer_mentions_schema_rejections_only_when_there_were_any() -> None:
+    clean = result([])
+    noisy = clean.model_copy(
+        update={"metrics": [clean.metrics[0].model_copy(update={"output_rejections": 3})]}
+    )
+
+    assert "schema rejections" not in render_report(clean)
+    assert "· 3 schema rejections ·" in render_report(noisy)
+
+
 def finding(**overrides) -> Finding:
     base = dict(
         id="security-1",

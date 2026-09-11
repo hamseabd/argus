@@ -3,8 +3,8 @@
 The schemas are derived from the domain models so the two cannot drift,
 then reshaped for the SDK's validator: pipeline-owned fields are removed,
 $ref definitions are inlined, every property is required (optional ones are
-nullable instead), objects forbid extra keys, and only draft-07 keywords
-remain.
+nullable instead), objects forbid extra keys, prose fields get a length
+floor, and only draft-07 keywords remain.
 """
 
 from copy import deepcopy
@@ -19,18 +19,31 @@ PIPELINE_OWNED: dict[type[BaseModel], frozenset[str]] = {
     Verdict: frozenset({"finding_id"}),
 }
 """Fields the pipeline fills in; the model never sees them in its output schema."""
+PROSE_MIN_LENGTH: dict[type[BaseModel], dict[str, int]] = {
+    Review: {"summary": 80},
+    Verdict: {"reasoning": 80},
+}
+"""Length floors for the prose the prompts size as "two to five sentences".
+
+They live in the schema the SDK validates, not in the domain model: a
+placeholder that fits the shape ("Test call to diagnose schema validation.")
+is rejected and the model has to write the real thing, while the pipeline
+can still build a Review or Verdict from any source.
+"""
 _DROPPED_KEYWORDS = {"default", "title"}
 
 
 def review_schema() -> dict[str, Any]:
     schema = _strict(Review.model_json_schema())
     _remove_properties(schema["properties"]["findings"]["items"], PIPELINE_OWNED[Finding])
+    _require_prose(schema, PROSE_MIN_LENGTH[Review])
     return schema
 
 
 def verdict_schema() -> dict[str, Any]:
     schema = _strict(Verdict.model_json_schema())
     _remove_properties(schema, PIPELINE_OWNED[Verdict])
+    _require_prose(schema, PROSE_MIN_LENGTH[Verdict])
     return schema
 
 
@@ -71,3 +84,8 @@ def _remove_properties(obj: dict[str, Any], names: frozenset[str]) -> None:
     for name in names:
         obj["properties"].pop(name, None)
     obj["required"] = [n for n in obj["required"] if n not in names]
+
+
+def _require_prose(schema: dict[str, Any], floors: dict[str, int]) -> None:
+    for name, floor in floors.items():
+        schema["properties"][name]["minLength"] = floor

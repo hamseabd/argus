@@ -60,11 +60,19 @@ def render_footer(result: ReviewResult) -> str:
     turns = sum(m.num_turns for m in metrics)
     seconds = result.duration_ms / 1000
     subagents = sum(m.subagents_run for m in metrics)
-    return (
-        f"Cost ${result.total_cost_usd:.2f} · {total_input:,} input tokens ({cached:,} cached) · "
-        f"{output:,} output tokens · {turns} turns · {seconds:.1f} s · {subagents} subagents · "
-        f"session {result.session_id}"
-    )
+    rejections = sum(m.output_rejections for m in metrics)
+    parts = [
+        f"Cost ${result.total_cost_usd:.2f}",
+        f"{total_input:,} input tokens ({cached:,} cached)",
+        f"{output:,} output tokens",
+        f"{turns} turns",
+        f"{seconds:.1f} s",
+        f"{subagents} subagents",
+    ]
+    if rejections:
+        parts.append(f"{rejections} schema rejection{'s' if rejections != 1 else ''}")
+    parts.append(f"session {result.session_id}")
+    return " · ".join(parts)
 
 
 def _meta(finding: Finding) -> str:
