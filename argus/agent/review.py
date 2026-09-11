@@ -49,6 +49,8 @@ class SdkReviewAgent:
             get_logger().warning(
                 "specialist_turn_cap", agents=capped, max_turns=self._settings.specialist_max_turns
             )
+        if rerun := rerun_specialists(outcome.metrics.agents):
+            get_logger().warning("specialist_rerun", agents=rerun)
         return StageOutcome(review, outcome.metrics, outcome.session_id)
 
     async def verify(
@@ -76,5 +78,16 @@ class SdkReviewAgent:
 
 
 def turn_capped_specialists(agents: list[AgentMetrics], max_turns: int) -> list[str]:
-    """Specialists that used every turn they had, so their findings may be incomplete."""
-    return [a.agent for a in agents if a.agent != LEAD_AGENT and a.turns >= max_turns]
+    """Specialists that used every turn they had, so their findings may be incomplete.
+
+    The cap is per run, and a rerun specialist's turns are summed, so those are
+    left to rerun_specialists rather than misreported here.
+    """
+    return [
+        a.agent for a in agents if a.agent != LEAD_AGENT and a.runs == 1 and a.turns >= max_turns
+    ]
+
+
+def rerun_specialists(agents: list[AgentMetrics]) -> list[str]:
+    """Specialists the lead started more than once, against its instructions."""
+    return [a.agent for a in agents if a.agent != LEAD_AGENT and a.runs > 1]

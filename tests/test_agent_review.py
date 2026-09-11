@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
 
-from argus.agent.review import SdkReviewAgent, turn_capped_specialists
+from argus.agent.review import SdkReviewAgent, rerun_specialists, turn_capped_specialists
 from argus.agent.runner import SdkRunner
 from argus.domain.errors import ReviewProtocolError
 from argus.domain.models import AgentMetrics, Finding, Review, ReviewContext
@@ -129,6 +129,16 @@ def test_specialists_that_hit_the_turn_cap_are_named() -> None:
     ]
 
     assert turn_capped_specialists(agents, max_turns=15) == ["quality", "correctness"]
+
+
+def test_a_specialist_run_twice_is_reported_as_rerun_not_as_capped() -> None:
+    agents = [
+        AgentMetrics(agent="lead", turns=3),
+        AgentMetrics(agent="security", turns=20, runs=2),  # two runs of 10; the cap is per run
+    ]
+
+    assert turn_capped_specialists(agents, max_turns=15) == []
+    assert rerun_specialists(agents) == ["security"]
 
 
 def test_review_warns_when_fewer_than_three_specialists_ran(tmp_path: Path) -> None:

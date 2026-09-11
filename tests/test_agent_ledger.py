@@ -42,3 +42,37 @@ def test_a_subagent_the_lead_never_named_is_listed_as_agent() -> None:
     ledger.record(message("from somewhere else", parent_tool_use_id="tu-unknown"))
 
     assert [a.agent for a in ledger.metrics(HookState())] == ["lead", "security", "agent"]
+
+
+def test_an_agent_name_that_could_break_markdown_is_not_used() -> None:
+    ledger = AgentLedger()
+    ledger.record(
+        AssistantMessage(
+            content=[
+                ToolUseBlock(id="tu-1", name="Agent", input={"subagent_type": "quality"}),
+                ToolUseBlock(id="tu-2", name="Agent", input={"subagent_type": "x](http://e)\n#"}),
+            ],
+            model="m",
+        )
+    )
+
+    assert [a.agent for a in ledger.metrics(HookState())] == ["lead", "quality", "agent"]
+
+
+def test_delegating_twice_to_one_specialist_sums_its_turns_and_counts_the_runs() -> None:
+    ledger = AgentLedger()
+    ledger.record(
+        AssistantMessage(
+            content=[
+                ToolUseBlock(id="tu-1", name="Agent", input={"subagent_type": "security"}),
+                ToolUseBlock(id="tu-2", name="Agent", input={"subagent_type": "security"}),
+            ],
+            model="m",
+        )
+    )
+    ledger.record(message("first run", parent_tool_use_id="tu-1", message_id="a"))
+    ledger.record(message("second run", parent_tool_use_id="tu-2", message_id="b"))
+
+    security = ledger.metrics(HookState())[1]
+    assert (security.agent, security.turns, security.runs) == ("security", 2, 2)
+    assert ledger.metrics(HookState())[0].runs == 1  # the lead

@@ -52,9 +52,9 @@ def test_footer_lists_each_agent_when_the_metrics_carry_them() -> None:
 
     assert "Agents:" not in render_report(plain)
     assert (
-        "Agents: lead 4 turns, 1 tool call · security 9 turns, 12 tool calls, 48.2 s · "
+        "\n\nAgents: lead 4 turns, 1 tool call · security 9 turns, 12 tool calls, 48.2 s · "
         "quality 15 turns, 21 tool calls, 61.0 s"
-    ) in render_report(with_agents)
+    ) in render_report(with_agents)  # its own paragraph, so no renderer folds it into the footer
 
 
 def test_footer_mentions_schema_rejections_only_when_there_were_any() -> None:

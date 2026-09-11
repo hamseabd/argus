@@ -7,6 +7,7 @@ each of those ids stands for; the tool hooks count calls and time per
 subagent id. The result is one AgentMetrics per agent type, lead first.
 """
 
+import re
 from dataclasses import dataclass, field
 
 from claude_agent_sdk import AssistantMessage, ToolUseBlock
@@ -16,6 +17,8 @@ from argus.domain.models import AgentMetrics
 
 AGENT_TOOL = "Agent"
 _UNKNOWN_AGENT = "agent"
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+"""The model picks the subagent name and it ends up in a public review; keep it plain."""
 
 
 @dataclass
@@ -26,6 +29,8 @@ class _Tally:
     cache_creation_input_tokens: int = 0
     seen: set[str] = field(default_factory=set)
     """API message ids already counted; the stream repeats one per content block."""
+    runs: set[str] = field(default_factory=set)
+    """Agent tool_use ids that started this agent type; more than one means a rerun."""
 
 
 class AgentLedger:
@@ -57,6 +62,7 @@ class AgentLedger:
             metrics.append(
                 AgentMetrics(
                     agent=name,
+                    runs=max(1, len(tally.runs)),
                     turns=tally.turns,
                     tool_calls=seen.tool_calls,
                     tool_failures=seen.tool_failures,
@@ -72,14 +78,20 @@ class AgentLedger:
         self._tallies.setdefault(LEAD_AGENT, _Tally())
         for block in message.content:
             if isinstance(block, ToolUseBlock) and block.name == AGENT_TOOL:
-                name = str(block.input.get("subagent_type") or _UNKNOWN_AGENT)
+                name = _agent_name(block.input.get("subagent_type"))
                 self._spawned[block.id] = name
-                self._tallies.setdefault(name, _Tally())
+                self._tallies.setdefault(name, _Tally()).runs.add(block.id)
 
     def _name(self, parent_tool_use_id: str | None) -> str:
         if parent_tool_use_id is None:
             return LEAD_AGENT
         return self._spawned.get(parent_tool_use_id, _UNKNOWN_AGENT)
+
+
+def _agent_name(requested: object) -> str:
+    if isinstance(requested, str) and _SAFE_NAME.match(requested):
+        return requested
+    return _UNKNOWN_AGENT
 
 
 def _counters_by_name(state: HookState) -> dict[str, AgentCounters]:

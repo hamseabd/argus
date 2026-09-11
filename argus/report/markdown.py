@@ -75,7 +75,7 @@ def render_footer(result: ReviewResult) -> str:
     footer = " · ".join(parts)
     review_stage = next((m for m in metrics if m.stage == "review"), None)
     if review_stage and review_stage.agents:
-        footer += "\n" + render_agents(review_stage.agents)
+        footer += "\n\n" + render_agents(review_stage.agents)
     return footer
 
 
