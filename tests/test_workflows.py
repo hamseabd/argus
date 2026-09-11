@@ -36,6 +36,10 @@ def test_review_cancels_a_superseded_run_for_the_same_pr() -> None:
     assert "inputs.pr" in concurrency["group"]
 
 
+def test_review_job_has_a_timeout() -> None:
+    assert 0 < load("review.yml")["jobs"]["review"]["timeout-minutes"] <= 60
+
+
 def test_review_skips_drafts_and_fork_pull_requests() -> None:
     condition = load("review.yml")["jobs"]["review"]["if"]
 

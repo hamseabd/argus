@@ -28,29 +28,30 @@ flowchart LR
         GH --> CTX[ReviewContext<br/>diff, files, metadata]
         GIT --> CTX
     end
-    CTX --> LEAD
 
     subgraph review[2. review: one query]
         LEAD[lead reviewer<br/>Opus]
-        LEAD --> C[correctness<br/>Sonnet]
-        LEAD --> S[security<br/>Sonnet]
-        LEAD --> Q[quality<br/>Sonnet]
-        C --> LEAD
-        S --> LEAD
-        Q --> LEAD
+        C[correctness<br/>Sonnet]
+        S[security<br/>Sonnet]
+        Q[quality<br/>Sonnet]
+        LEAD --> C --> LEAD
+        LEAD --> S --> LEAD
+        LEAD --> Q --> LEAD
     end
-    LEAD --> REV[Review<br/>structured output]
 
     subgraph verify[3. verify: one query per finding]
-        REV --> V1[verifier]
-        REV --> V2[verifier]
-        REV --> V3[verifier]
+        V1[verifier]
+        V2[verifier]
+        V3[verifier]
     end
-    V1 --> RANK
-    V2 --> RANK
-    V3 --> RANK
 
-    RANK[4. rank<br/>drop rejected] --> OUT[5. report<br/>terminal · JSON · GitHub review]
+    RANK[4. rank<br/>drop rejected]
+    OUT[5. report<br/>terminal · JSON · GitHub review]
+
+    CTX --> LEAD
+    LEAD --> REV[Review<br/>structured output]
+    REV --> V1 & V2 & V3
+    V1 & V2 & V3 --> RANK --> OUT
 ```
 
 Python owns the pipeline; the SDK owns the fan-out inside the review stage.

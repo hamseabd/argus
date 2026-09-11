@@ -40,6 +40,9 @@ jobs:
       (github.event.pull_request.draft == false &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
+    # A review of a small PR takes about five minutes; a stuck one must not hold
+    # the runner (and the quota window) for the six-hour default.
+    timeout-minutes: 30
     steps:
       - name: Check out Argus from the default branch (trusted)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
