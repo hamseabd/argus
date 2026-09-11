@@ -51,7 +51,7 @@ def test_review_can_be_called_from_another_repository() -> None:
     call = load("review.yml")["on"]["workflow_call"]
 
     assert call["secrets"]["CLAUDE_CODE_OAUTH_TOKEN"]["required"] is True
-    assert call["inputs"]["argus-repository"]["default"] == "hamseabd/argus"
+    assert "inputs" not in call  # the caller pins a commit; nothing else to configure
 
 
 def test_argus_runs_from_a_trusted_ref_and_only_reads_the_pr_head() -> None:
@@ -61,10 +61,11 @@ def test_argus_runs_from_a_trusted_ref_and_only_reads_the_pr_head() -> None:
     trusted, target = checkouts
 
     # Here: the default branch, never the pull request's code. Called from
-    # another repository: this workflow's own pinned commit.
-    assert trusted["with"]["repository"] == "${{ inputs.argus-repository || github.repository }}"
+    # another repository: this workflow's own pinned commit. The job.* fields
+    # describe the called workflow file (verified against a live run).
+    assert trusted["with"]["repository"] == "${{ job.workflow_repository }}"
     assert trusted["with"]["ref"] == (
-        "${{ inputs.argus-repository && job.workflow_sha"
+        "${{ github.repository != job.workflow_repository && job.workflow_sha"
         " || github.event.repository.default_branch }}"
     )
     assert "path" not in trusted["with"]

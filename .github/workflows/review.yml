@@ -26,12 +26,6 @@ on:
         required: true
         type: number
   workflow_call:
-    inputs:
-      argus-repository:
-        description: Repository that holds Argus, checked out at this workflow's own commit
-        required: false
-        type: string
-        default: hamseabd/argus
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: Claude subscription token from `claude setup-token`
@@ -62,10 +56,12 @@ jobs:
       - name: Check out Argus (trusted)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Here: the default branch, never the pull request's code. Called from
-          # another repository: this workflow's own commit, which the caller pinned.
-          repository: ${{ inputs.argus-repository || github.repository }}
-          ref: ${{ inputs.argus-repository && job.workflow_sha || github.event.repository.default_branch }}
+          # job.workflow_repository and job.workflow_sha describe this workflow file,
+          # not the caller's. In this repository that would be the pull request's
+          # own commit, so the default branch is used instead; called from another
+          # repository it is the commit the caller pinned, which is what we want.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ github.repository != job.workflow_repository && job.workflow_sha || github.event.repository.default_branch }}
       - name: Check out the pull request head (reviewed, never executed)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
