@@ -18,11 +18,11 @@ DEFAULT_BASE = "main"
 
 def repo_root(path: Path) -> Path:
     """The top-level directory of the repository containing path."""
-    return Path(_git(path, "rev-parse", "--show-toplevel")).resolve()
+    return Path(run_git(path, "rev-parse", "--show-toplevel")).resolve()
 
 
 def head_sha(repo: Path) -> str:
-    return _git(repo, "rev-parse", "HEAD")
+    return run_git(repo, "rev-parse", "HEAD")
 
 
 def local_diff(repo: Path, base: str = DEFAULT_BASE) -> str:
@@ -33,8 +33,8 @@ def local_diff(repo: Path, base: str = DEFAULT_BASE) -> str:
     changes under review. Rename detection is on so a moved file is one
     section rather than a delete and an add.
     """
-    merge_base = _git(repo, "merge-base", "--end-of-options", base, "HEAD")
-    return _git(
+    merge_base = run_git(repo, "merge-base", "--end-of-options", base, "HEAD")
+    return run_git(
         repo,
         # Pin the output shape so a user's diff.noprefix, diff.mnemonicPrefix,
         # or core.quotePath settings cannot change what the parser sees.
@@ -67,7 +67,8 @@ def local_context(
     )
 
 
-def _git(cwd: Path, *args: str, strip: bool = True) -> str:
+def run_git(cwd: Path, *args: str, strip: bool = True) -> str:
+    """Run one git command and return its stdout; any failure is a GitError with git's message."""
     try:
         completed = subprocess.run(
             ["git", "-C", str(cwd), *args],

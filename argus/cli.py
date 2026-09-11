@@ -3,14 +3,14 @@
 import asyncio
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 from pydantic import ValidationError
 
 from argus import __version__, telemetry
 from argus.auth import credential_problem, credential_source
-from argus.context.git import head_sha, local_context
+from argus.context.git import head_sha, local_context, repo_root
 from argus.context.github import GitHubClient, parse_repo, pr_context, repo_from_remote
 from argus.domain.errors import ArgusError, GitHubError
 from argus.domain.models import SEVERITY_ORDER, Finding, ReviewContext, ReviewResult
@@ -100,8 +100,11 @@ def review(
             context = local_context(Path.cwd(), base, settings.diff_size_cap)
         else:
             client, owner, name = github
-            context = pr_context(client, owner, name, pr, Path.cwd(), settings.diff_size_cap)
+            root = repo_root(Path.cwd())
+            context = pr_context(client, owner, name, pr, root, settings.diff_size_cap)
             _warn_on_head_mismatch(context)
+        if not context.files and not context.diff_text.strip():
+            _fail("nothing to review: the diff is empty")
         result = asyncio.run(
             run_review(
                 context,
@@ -167,7 +170,8 @@ def _warn_on_head_mismatch(context: ReviewContext) -> None:
 
 def _post_review(client: GitHubClient, context: ReviewContext, result: ReviewResult) -> None:
     payload = build_review(result, context)
-    assert context.pr is not None  # build_review already checked
+    if context.pr is None:  # build_review already refused this; keep the type checker happy
+        _fail("cannot post a review without a pull request")
     try:
         url = client.post_review(context.pr.owner, context.pr.repo, context.pr.number, payload)
     except GitHubError as exc:
@@ -188,7 +192,7 @@ def _settings_problem(exc: ValidationError) -> str:
     )
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     telemetry.get_logger().error("run_failed", error=message)
     typer.echo(f"argus: {message}", err=True)
     raise typer.Exit(EXIT_ERROR)

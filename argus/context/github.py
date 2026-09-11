@@ -6,7 +6,6 @@ transport failure becomes a GitHubError carrying the status and body.
 """
 
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +13,8 @@ import httpx
 
 from argus import __version__
 from argus.context.diff import DIFF_SIZE_CAP, cap_diff, parse_diff
-from argus.domain.errors import GitHubError
+from argus.context.git import run_git
+from argus.domain.errors import GitError, GitHubError
 from argus.domain.models import ChangedFile, ChangedFileStatus, PRInfo, ReviewContext
 
 API_URL = "https://api.github.com"
@@ -123,16 +123,11 @@ def parse_repo(value: str) -> tuple[str, str]:
 
 def repo_from_remote(repo_root: Path) -> str | None:
     """The "owner/name" of the origin remote when it points at GitHub, else None."""
-    completed = subprocess.run(
-        ["git", "-C", str(repo_root), "remote", "get-url", "origin"],
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if completed.returncode != 0:
+    try:
+        url = run_git(repo_root, "remote", "get-url", "origin")
+    except GitError:
         return None
-    match = _GITHUB_REMOTE.search(completed.stdout.strip())
+    match = _GITHUB_REMOTE.search(url)
     if match is None:
         return None
     return f"{match['owner']}/{match['repo']}"

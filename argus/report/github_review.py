@@ -20,11 +20,10 @@ def build_review(result: ReviewResult, context: ReviewContext) -> dict[str, Any]
     if context.pr is None:
         raise ValueError("a GitHub review needs a pull request context")
     index = commentable_index(parse_diff(context.diff_text))
-    changed = {f.path for f in context.files}
     comments: list[dict[str, Any]] = []
     in_body: list[Finding] = []
     for finding in rank_findings(result.review.findings):
-        lines = index.get(finding.file, frozenset()) if finding.file in changed else frozenset()
+        lines = index.get(finding.file, frozenset())
         if finding.line in lines:
             comments.append(_comment(finding, lines))
         else:

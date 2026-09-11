@@ -114,8 +114,10 @@ def test_verify_output_that_fails_validation_is_a_protocol_error(tmp_path: Path)
     recorder = Recorder(result({"verdict": "maybe", "reasoning": "r", "confidence": 0.7}))
     finding = Finding(id="security-1", **RAW_FINDING)
 
-    with pytest.raises(ReviewProtocolError, match="Verdict"):
+    with pytest.raises(ReviewProtocolError, match="Verdict") as info:
         asyncio.run(agent(recorder).verify(context(tmp_path), finding, ""))
+
+    assert info.value.cost_usd == 0.2  # the query was billed even though its answer was unusable
 
 
 def test_review_warns_when_fewer_than_three_specialists_ran(tmp_path: Path) -> None:

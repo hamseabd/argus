@@ -21,7 +21,10 @@ DIFF_SIZE_CAP = 200 * 1024
 """Bytes of diff text the lead reviewer is given at most; larger files are dropped."""
 
 _FILE_HEADER = "diff --git "
-_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,\d+)? @@")
+HUNK_HEADER = re.compile(
+    r"^@@ -(?P<old_start>\d+)(?:,(?P<old_len>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_len>\d+))? @@"
+)
+"""A unified-diff hunk header; a missing length means 1."""
 _NO_PATH = "/dev/null"
 _C_ESCAPES = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
 
@@ -217,10 +220,10 @@ def _commentable_lines(hunk_lines: list[str]) -> set[int]:
     new_line = 0
     for line in hunk_lines:
         if line.startswith("@@"):
-            match = _HUNK_HEADER.match(line)
+            match = HUNK_HEADER.match(line)
             if match is None:
                 raise DiffParseError(f"malformed hunk header: {line!r}")
-            new_line = int(match.group("start"))
+            new_line = int(match.group("new_start"))
             continue
         if line.startswith("\\"):
             continue  # "\ No newline at end of file" annotates the previous line

@@ -83,6 +83,7 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
 
     def fake_pr_context(client, owner, repo, number, repo_root, max_bytes=0) -> ReviewContext:
         calls["pr"] = (owner, repo, number)
+        calls["root"] = repo_root
         return ReviewContext(
             source="pr",
             repo_root=tmp_path,
@@ -99,6 +100,7 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
     monkeypatch.setattr(cli, "pr_context", fake_pr_context)
     monkeypatch.setattr(cli, "run_review", fake_run_review)
     monkeypatch.setattr(cli, "head_sha", lambda path: "a" * 40)
+    monkeypatch.setattr(cli, "repo_root", lambda path: tmp_path / "toplevel")
     monkeypatch.setattr(cli, "repo_from_remote", lambda path: None)
     monkeypatch.setenv("GITHUB_TOKEN", "ghs_test")
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
@@ -122,6 +124,7 @@ def test_pr_mode_reviews_and_prints_without_posting(stubbed: dict) -> None:
     assert stubbed["pr"] == ("o", "r", 7)
     assert stubbed["token"] == "ghs_test"
     assert stubbed["context"].source == "pr"
+    assert stubbed["root"].name == "toplevel"  # the git top level, not the working directory
     assert "# Argus review" in result.output
     assert "posted" not in stubbed
 

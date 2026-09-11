@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from argus import telemetry
-from argus.domain.errors import AgentRunError
+from argus.domain.errors import AgentRunError, ReviewProtocolError
 from argus.domain.models import Finding, Review, ReviewContext, StageMetrics, Verdict
 from argus.pipeline import StageOutcome, run_review
 
@@ -177,3 +177,22 @@ def test_a_caller_supplied_run_id_is_used(tmp_path: Path) -> None:
     asyncio.run(run_review(context(tmp_path), agent, run_id="given-1"))
 
     assert {json.loads(line)["run_id"] for line in stream.getvalue().splitlines()} == {"given-1"}
+
+
+def test_a_paid_but_invalid_verdict_still_counts_toward_the_total(tmp_path: Path) -> None:
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    agent = FakeAgent(review, {"correctness-1": ReviewProtocolError("bad verdict", cost_usd=0.2)})
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    assert result.review.findings[0].status == "unverified"
+    assert result.total_cost_usd == 1.2
+
+
+def test_an_integer_cost_on_a_failed_verification_is_handled(tmp_path: Path) -> None:
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    agent = FakeAgent(review, {"correctness-1": AgentRunError("error_max_turns", 0)})
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    assert result.total_cost_usd == 1.0

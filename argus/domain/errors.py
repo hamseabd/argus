@@ -23,7 +23,15 @@ class AgentRunError(ArgusError):
 
 
 class ReviewProtocolError(ArgusError):
-    """A query succeeded but did not return the structured output it promised."""
+    """A query succeeded but did not return the structured output it promised.
+
+    The query was still paid for, so the cost travels with the error.
+    """
+
+    def __init__(self, message: str, cost_usd: float = 0.0, session_id: str | None = None) -> None:
+        self.cost_usd = cost_usd
+        self.session_id = session_id
+        super().__init__(message)
 
 
 class GitHubError(ArgusError):
