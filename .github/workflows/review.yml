@@ -5,7 +5,12 @@ name: argus-review
 # run on every push (synchronize) so a busy branch neither burns quota nor
 # stacks duplicate reviews.
 #
-# Trust model: Argus itself is installed and run from the default branch.
+# Any repository can reuse it: call this file as a reusable workflow at a
+# pinned tag and pass CLAUDE_CODE_OAUTH_TOKEN (see the README). Argus is then
+# checked out from its own repository at that same pinned commit.
+#
+# Trust model: Argus itself is installed and run from a trusted ref, this
+# repository's default branch or the commit a calling repository pinned.
 # The pull request head is checked out into a separate directory that is
 # only read, never installed or executed, so a PR cannot run its own code
 # next to the subscription token. Pull requests from forks are skipped on
@@ -21,6 +26,16 @@ on:
         description: Pull request number to review
         required: true
         type: number
+  workflow_call:
+    inputs:
+      pr:
+        description: Pull request number to review when the calling event is not a pull_request
+        required: false
+        type: number
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: Claude subscription token from `claude setup-token`
+        required: true
 
 permissions:
   contents: read
@@ -44,10 +59,15 @@ jobs:
     # the runner (and the quota window) for the six-hour default.
     timeout-minutes: 30
     steps:
-      - name: Check out Argus from the default branch (trusted)
+      - name: Check out Argus (trusted)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          # job.workflow_repository and job.workflow_sha describe this workflow file,
+          # not the caller's. In this repository that would be the pull request's
+          # own commit, so the default branch is used instead; called from another
+          # repository it is the commit the caller pinned, which is what we want.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ github.repository != job.workflow_repository && job.workflow_sha || github.event.repository.default_branch }}
       - name: Check out the pull request head (reviewed, never executed)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
