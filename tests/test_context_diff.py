@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from argus.context.diff import DIFF_SIZE_CAP, FileDiff, cap_diff, commentable_index, parse_diff
+from argus.domain.errors import ArgusError, DiffParseError
 from argus.domain.models import ChangedFile
 
 FIXTURES = Path(__file__).parent / "fixtures" / "diffs"
@@ -105,7 +106,7 @@ def test_text_before_the_first_file_header_is_ignored() -> None:
 def test_malformed_hunk_header_is_an_error() -> None:
     text = "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ nonsense @@\n+a\n"
 
-    with pytest.raises(ValueError, match="hunk header"):
+    with pytest.raises(DiffParseError, match="hunk header"):
         parse_diff(text)
 
 
@@ -204,3 +205,71 @@ def test_every_fixture_parses_and_reassembles(name: str) -> None:
 
     assert files
     assert "".join(f.text for f in files) == text
+
+
+def test_form_feed_inside_a_line_does_not_split_it() -> None:
+    text = (
+        "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1,3 +1,4 @@\n a\n+b\x0cc\n d\n e\n"
+    )
+
+    (file,) = parse_diff(text)
+
+    assert file.commentable_lines == frozenset({1, 2, 3, 4})
+
+
+def test_line_separator_characters_do_not_start_a_new_file() -> None:
+    text = (
+        "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n"
+        "+z\u2028diff --git a/evil b/evil\n"
+    )
+
+    files = parse_diff(text)
+
+    assert [f.path for f in files] == ["x.py"]
+
+
+def test_quoted_paths_are_unescaped() -> None:
+    text = (
+        'diff --git "a/caf\\303\\251 \\"q\\".py" "b/caf\\303\\251 \\"q\\".py"\n'
+        'index 1..2 100644\n--- "a/caf\\303\\251 \\"q\\".py"\n+++ "b/caf\\303\\251 \\"q\\".py"\n'
+        "@@ -1 +1 @@\n-a\n+b\n"
+    )
+
+    (file,) = parse_diff(text)
+
+    assert file.path == 'café "q".py'
+    assert file.commentable_lines == frozenset({1})
+
+
+def test_quoted_path_on_a_binary_file_without_marker_lines() -> None:
+    text = (
+        'diff --git "a/bin \\303\\251.bin" "b/bin \\303\\251.bin"\n'
+        "index 1..2 100644\nBinary files a/bin é.bin and b/bin é.bin differ\n"
+    )
+
+    (file,) = parse_diff(text)
+
+    assert file.path == "bin é.bin"
+
+
+def test_malformed_quoted_path_does_not_crash() -> None:
+    text = 'diff --git "a/x\\" "b/x\\"\nBinary files differ\n'
+
+    (file,) = parse_diff(text)
+
+    assert file.path == "x\\"
+
+
+def test_parse_errors_are_argus_errors() -> None:
+    assert issubclass(DiffParseError, ArgusError)
+    with pytest.raises(DiffParseError):
+        parse_diff("diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@@ merge @@@\n+a\n")
+    with pytest.raises(DiffParseError):
+        parse_diff("diff --git nonsense\nBinary files differ\n")
+
+
+def test_size_bytes_is_computed_once() -> None:
+    (file,) = parse_diff(load("modified.diff"))
+
+    assert file.size_bytes == len(file.text.encode())
+    assert "size_bytes" in file.__dataclass_fields__

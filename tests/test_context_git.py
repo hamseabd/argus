@@ -2,8 +2,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from argus.context.git import head_sha, local_context, local_diff, repo_root
 
+from argus.context.git import head_sha, local_context, local_diff, repo_root
 from argus.domain.errors import GitError
 from argus.domain.models import ChangedFile
 
@@ -122,3 +122,44 @@ def test_local_context_applies_the_size_cap_but_still_lists_every_file(repo: Pat
     assert [f.path for f in capped.files] == [f.path for f in full.files]
     for path in capped.truncated_files:
         assert f"+++ b/{path}" not in capped.diff_text
+
+
+def test_local_diff_output_is_independent_of_user_diff_config(repo: Path) -> None:
+    git(repo, "config", "diff.noprefix", "true")
+    git(repo, "config", "diff.mnemonicPrefix", "true")
+    (repo / "img.bin").write_bytes(b"\x00\x01")
+    git(repo, "add", "img.bin")
+
+    ctx = local_context(repo, base="main")
+
+    assert [f.path for f in ctx.files] == [
+        "img.bin",
+        "pkg/gone.py",
+        "pkg/module.py",
+        "pkg/new.py",
+        "pkg/new_name.py",
+    ]
+
+
+def test_non_ascii_paths_are_not_quoted(repo: Path) -> None:
+    git(repo, "config", "core.quotePath", "true")
+    (repo / "café.py").write_text("x\n")
+    git(repo, "add", "café.py")
+
+    ctx = local_context(repo, base="main")
+
+    assert "café.py" in [f.path for f in ctx.files]
+
+
+def test_non_utf8_content_does_not_escape_as_a_decode_error(repo: Path) -> None:
+    (repo / "latin1.txt").write_bytes("caf\xe9\n".encode("latin-1"))
+    git(repo, "add", "latin1.txt")
+
+    ctx = local_context(repo, base="main")
+
+    assert "latin1.txt" in [f.path for f in ctx.files]
+
+
+def test_option_like_base_is_rejected_not_interpreted(repo: Path) -> None:
+    with pytest.raises(GitError):
+        local_diff(repo, base="--help")

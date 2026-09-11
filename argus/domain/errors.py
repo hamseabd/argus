@@ -38,3 +38,7 @@ class GitHubError(ArgusError):
 
 class GitError(ArgusError):
     """A git subprocess failed or the repository is not in the expected state."""
+
+
+class DiffParseError(ArgusError):
+    """A unified diff did not have the shape the parser expects."""

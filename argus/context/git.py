@@ -33,8 +33,22 @@ def local_diff(repo: Path, base: str = DEFAULT_BASE) -> str:
     changes under review. Rename detection is on so a moved file is one
     section rather than a delete and an add.
     """
-    merge_base = _git(repo, "merge-base", base, "HEAD")
-    return _git(repo, "diff", "--no-color", "--no-ext-diff", "-M", merge_base, strip=False)
+    merge_base = _git(repo, "merge-base", "--end-of-options", base, "HEAD")
+    return _git(
+        repo,
+        # Pin the output shape so a user's diff.noprefix, diff.mnemonicPrefix,
+        # or core.quotePath settings cannot change what the parser sees.
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "-M",
+        merge_base,
+        strip=False,
+    )
 
 
 def local_context(
@@ -58,12 +72,21 @@ def _git(cwd: Path, *args: str, strip: bool = True) -> str:
         completed = subprocess.run(
             ["git", "-C", str(cwd), *args],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except OSError as exc:  # git missing or cwd unusable
         raise GitError(f"could not run git {args[0]}: {exc}") from exc
     if completed.returncode != 0:
         detail = completed.stderr.strip() or f"exit status {completed.returncode}"
-        raise GitError(f"git {args[0]} failed: {detail}")
+        raise GitError(f"git {_subcommand(args)} failed: {detail}")
     return completed.stdout.strip() if strip else completed.stdout
+
+
+def _subcommand(args: tuple[str, ...]) -> str:
+    """The git verb in args, skipping any leading -c key=value pairs."""
+    i = 0
+    while i < len(args) and args[i] == "-c":
+        i += 2
+    return args[i] if i < len(args) else "?"
