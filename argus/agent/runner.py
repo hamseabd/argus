@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from claude_agent_sdk import (
+    AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKError,
     RateLimitEvent,
@@ -21,6 +22,7 @@ from claude_agent_sdk import (
 )
 
 from argus.agent.hooks import HookState
+from argus.agent.ledger import AgentLedger
 from argus.domain.errors import AgentRunError, ReviewProtocolError
 from argus.domain.models import StageMetrics
 from argus.telemetry import bind_run, get_logger
@@ -54,6 +56,7 @@ class SdkRunner:
         model = options.model or "default"
         log.info("stage_start", stage=stage, model=model)
         result: ResultMessage | None = None
+        ledger = AgentLedger()
         try:
             # The result message is always last; do not break out of the loop early,
             # closing the generator before it finishes raises from its aclose().
@@ -61,6 +64,8 @@ class SdkRunner:
                 if isinstance(message, ResultMessage):
                     result = message
                     bind_run(session_id=message.session_id)
+                elif isinstance(message, AssistantMessage):
+                    ledger.record(message)
                 elif isinstance(message, RateLimitEvent):
                     info = message.rate_limit_info
                     log.warning(
@@ -104,6 +109,7 @@ class SdkRunner:
             duration_ms=result.duration_ms,
             subagents_run=state.subagents_started,
             output_rejections=state.output_rejections,
+            agents=ledger.metrics(state),
         )
         log.info("stage_end", **metrics.model_dump())
         return RunResult(
