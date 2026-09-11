@@ -12,7 +12,7 @@ Six inline findings, all confirmed by the verifier, including two real trust-mod
 ## What it does
 
 - **Reviews a pull request or a local diff.** `argus review --pr 7 --post` or `argus review --diff --base main`.
-- **Fans out to specialists.** One `query()` runs a lead reviewer that must delegate to `correctness`, `security`, and `quality` subagents, then merges and de-duplicates what they find; everything runs on Sonnet 5. The lead does not re-check findings itself; that is the verifier's job.
+- **Fans out to specialists.** One `query()` runs a lead reviewer on Opus that must delegate to `correctness`, `security`, and `quality` subagents on Sonnet, then merges and de-duplicates what they find. The lead does not re-check findings itself; that is the verifier's job.
 - **Verifies before it reports.** Every finding gets its own fresh query whose only job is to refute it by reading the code. Rejected findings are dropped; failed verifications are reported as `unverified`, never as confirmed.
 - **Posts inline.** A finding lands as a review comment on its line when that line is in the diff, otherwise in the review body. The review never requests changes; merge gating is the CLI exit code.
 - **Never touches the repository.** Reviewers get `Read`, `Grep`, `Glob`, `Agent`, and one custom read-only tool. Mutating tools are removed from the tool set and denied again by a `PreToolUse` hook.
@@ -30,10 +30,10 @@ flowchart LR
     end
 
     subgraph review[2. review: one query]
-        LEAD[lead reviewer]
-        C[correctness]
-        S[security]
-        Q[quality]
+        LEAD[lead reviewer<br/>Opus]
+        C[correctness<br/>Sonnet]
+        S[security<br/>Sonnet]
+        Q[quality<br/>Sonnet]
         LEAD --> C --> LEAD
         LEAD --> S --> LEAD
         LEAD --> Q --> LEAD
@@ -92,12 +92,12 @@ The SDK still reports what the same run would have cost on the API, and the JSON
 |---|---|---|---|
 | [PR #7](https://github.com/hamseabd/argus/pull/7#pullrequestreview-5174291207): 2 files, 6 findings, 6 verifications | $2.34 | 306 s | 48 |
 | [PR #8](https://github.com/hamseabd/argus/pull/8#pullrequestreview-5178840171): 3 files, 0 findings | $1.37 | 128 s | 22 |
-| PR #8 with the current prompts and a Sonnet lead: 1 finding, 1 verification | $0.73 | 181 s | 7 |
+| PR #8 with the current prompts: 1 finding, 1 verification | $1.02 | 190 s | 5 |
 
 Most of the input is cache reads: 805,554 of 805,620 input tokens on PR #7.
 The first two runs let the lead re-check findings itself, and it did: 22 to 26 Opus turns re-reading code, $0.88 of the $1.37 on PR #8.
-That is the verify stage's job, so the lead now delegates, merges, and returns, and its own thread costs a few cents.
-What remains of the lead's work does not need the larger model: on the same diff an Opus lead cost $1.02 and confirmed the same finding, so everything runs on Sonnet.
+That is the verify stage's job, so the lead now delegates, merges, and returns, and its own thread costs about $0.06.
+A Sonnet lead was measured on the same diff as well ($0.73, same finding) but it delegated one specialist at a time and made no-op Agent calls, so the lead stays on Opus, where its share of the cost is now negligible.
 The three specialists are now the bulk of a review and vary the most between runs ($0.48 to $0.94 on the same diff); the SDK result does not expose per-subagent usage, so instrumenting that comes before tuning them.
 Caps keep a runaway review short: the lead stops at 40 turns or $3.00, each verifier at 10 turns or $0.50.
 
