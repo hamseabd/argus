@@ -8,6 +8,7 @@ requires-python = ">=3.12"
 authors = [{ name = "Hamse Abdi", email = "hmseabd@gmail.com" }]
 dependencies = [
     "claude-agent-sdk>=0.2.152",
+    "pydantic>=2.11",
     "typer>=0.27",
 ]
 
