@@ -252,12 +252,11 @@ def test_quoted_path_on_a_binary_file_without_marker_lines() -> None:
     assert file.path == "bin é.bin"
 
 
-def test_malformed_quoted_path_does_not_crash() -> None:
+def test_malformed_quoted_path_is_a_parse_error() -> None:
     text = 'diff --git "a/x\\" "b/x\\"\nBinary files differ\n'
 
-    (file,) = parse_diff(text)
-
-    assert file.path == "x\\"
+    with pytest.raises(DiffParseError, match="file path"):
+        parse_diff(text)
 
 
 def test_parse_errors_are_argus_errors() -> None:
