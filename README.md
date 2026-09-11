@@ -2,8 +2,145 @@
 
 [![CI](https://github.com/hamseabd/argus/actions/workflows/ci.yml/badge.svg)](https://github.com/hamseabd/argus/actions/workflows/ci.yml)
 
-> A code-review agent on the Claude Agent SDK.
-> A lead reviewer fans out to parallel specialist subagents, verifies every finding before reporting it, and posts inline GitHub reviews.
-> Runs for $0 on GitHub Actions.
+Argus is a code-review agent built on the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agent-sdk/overview) (Python).
+A lead reviewer fans out to three parallel specialist subagents, every finding is checked by an independent verifier before it is reported, and the result lands on the pull request as inline review comments.
+It is read-only by construction, it runs for $0 on GitHub Actions, and it reviews its own pull requests.
 
-Status: under construction.
+**Sample review:** [Argus reviewing the pull request that added its own review workflow](https://github.com/hamseabd/argus/pull/7#pullrequestreview-5174291207).
+Six inline findings, all confirmed by the verifier, including two real trust-model flaws that the next commit fixed.
+
+## What it does
+
+- **Reviews a pull request or a local diff.** `argus review --pr 7 --post` or `argus review --diff --base main`.
+- **Fans out to specialists.** One `query()` runs a lead reviewer on Opus that must delegate to `correctness`, `security`, and `quality` subagents on Sonnet, then merges and de-duplicates what they find.
+- **Verifies before it reports.** Every finding gets its own fresh query whose only job is to refute it by reading the code. Rejected findings are dropped; failed verifications are reported as `unverified`, never as confirmed.
+- **Posts inline.** A finding lands as a review comment on its line when that line is in the diff, otherwise in the review body. The review never requests changes; merge gating is the CLI exit code.
+- **Never touches the repository.** Reviewers get `Read`, `Grep`, `Glob`, `Agent`, and one custom read-only tool. Mutating tools are removed from the tool set and denied again by a `PreToolUse` hook.
+- **Explains itself.** Structured JSON logs carry cost, tokens, turns, duration, and subagent count per stage, plus a tool-call audit trail, under one `run_id`.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph context[1. context]
+        PR[PR number] --> GH[GitHub API]
+        LD[local diff] --> GIT[git]
+        GH --> CTX[ReviewContext<br/>diff, files, metadata]
+        GIT --> CTX
+    end
+
+    subgraph review[2. review: one query]
+        LEAD[lead reviewer<br/>Opus]
+        C[correctness<br/>Sonnet]
+        S[security<br/>Sonnet]
+        Q[quality<br/>Sonnet]
+        LEAD --> C --> LEAD
+        LEAD --> S --> LEAD
+        LEAD --> Q --> LEAD
+    end
+
+    subgraph verify[3. verify: one query per finding]
+        V1[verifier]
+        V2[verifier]
+        V3[verifier]
+    end
+
+    RANK[4. rank<br/>drop rejected]
+    OUT[5. report<br/>terminal · JSON · GitHub review]
+
+    CTX --> LEAD
+    LEAD --> REV[Review<br/>structured output]
+    REV --> V1 & V2 & V3
+    V1 & V2 & V3 --> RANK --> OUT
+```
+
+Python owns the pipeline; the SDK owns the fan-out inside the review stage.
+
+| Layer | Package | Role |
+|---|---|---|
+| Domain | `argus/domain/` | Pydantic models (`Finding`, `Review`, `Verdict`, `ReviewResult`) and typed errors. No SDK imports. |
+| Context | `argus/context/` | Unified diff parser with the commentable-line index and a 200 KB size cap; local diff via git; GitHub client. |
+| Agent | `argus/agent/` | The only package that imports `claude_agent_sdk`: options, output schemas, hooks, the `git_history` tool, the runner, and the prompts. |
+| Pipeline | `argus/pipeline.py` | Stage orchestration over domain types, behind a `ReviewAgent` protocol so it is tested with a fake agent. |
+| Report | `argus/report/` | Terminal Markdown and the GitHub review payload. |
+| CLI | `argus/cli.py` | Typer. Imports the SDK lazily so `argus version` and the pipeline never load it. |
+
+That boundary is enforced by a test: a source scan proves only `argus/agent/` mentions the SDK, and a subprocess import proves the other modules never load it.
+
+### How a review runs
+
+1. **Context.** PR mode fetches the diff, changed files, and metadata from the GitHub REST API. Local mode diffs from the merge base with the base branch to the working tree. Files are dropped from the diff, largest first, until it fits the cap; the lead is told which ones to read directly.
+2. **Review.** The lead gets the change and must delegate to all three specialists in one turn. Each specialist returns a JSON array of findings. The lead merges them and answers with a `Review` as structured output, validated by the SDK against a schema derived from the domain model and re-validated by Pydantic.
+3. **Verify.** Each finding runs in its own query with only the finding and its diff hunk. The verifier confirms only if the code path actually exhibits the issue. At most four run at once.
+4. **Rank.** Rejected findings are dropped. The rest are ordered confirmed before unverified, then by severity, then by path.
+5. **Report.** Markdown in the terminal, a JSON artifact with `--json`, and with `--post` a GitHub review with inline comments.
+
+### Read-only guarantees
+
+- `tools` and `allowed_tools` restrict the model to `Read`, `Grep`, `Glob`, `Agent`, and `mcp__argus__git_history`.
+- A `PreToolUse` hook denies `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`, `WebFetch`, and `WebSearch` with a reason the model can read, so it does not retry.
+- `setting_sources=[]` isolates every query from the repository under review: its `.claude/` settings, hooks, and `CLAUDE.md` cannot reach the reviewer.
+- `git_history`, the one custom tool, runs `git log -L` for a line range and refuses paths outside the repository root. In local mode it maps working-tree line numbers to HEAD through the uncommitted hunks and labels lines that have no history yet.
+- The dogfood workflow installs and runs Argus from the default branch and only reads the pull request head, so a PR cannot execute its own code next to the token.
+
+## Cost
+
+Argus authenticates with a Claude subscription token from `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`), so a review costs quota, not money.
+The SDK still reports what the same run would have cost on the API.
+
+| Run | Cost | Time | Turns |
+|---|---|---|---|
+| [PR #7](https://github.com/hamseabd/argus/pull/7#pullrequestreview-5174291207): 2 files, 6 findings, 6 verifications | $2.34 | 306 s | 48 |
+
+Most of the input is cache reads: 805,554 of 805,620 input tokens in that run.
+Caps keep a runaway review short: the lead stops at 40 turns or $3.00, each verifier at 10 turns or $0.50.
+
+## Usage
+
+```bash
+uv sync
+export CLAUDE_CODE_OAUTH_TOKEN=...   # from `claude setup-token`; omitted, the machine login is used
+
+argus review --diff --base main                 # the current branch, terminal report
+argus review --pr 7 --repo owner/name --post    # a pull request, posted as a review (needs GITHUB_TOKEN)
+argus review --diff --json argus-review.json --fail-on high
+```
+
+| Option | Meaning |
+|---|---|
+| `--pr N` / `--diff` | Choose one. `--repo` defaults to `GITHUB_REPOSITORY`, then the origin remote. |
+| `--base REF` | Base for `--diff`. Default `main`. |
+| `--post` | Post the review on the pull request. Needs `--pr` and `GITHUB_TOKEN`. |
+| `--json PATH` | Write the full `ReviewResult`, written before posting so a posting failure still leaves the record. |
+| `--no-verify` | Skip the verify stage; every finding is reported as `unverified`. |
+| `--fail-on SEVERITY` | Exit 3 if any confirmed or unverified finding is at or above `critical`, `high`, `medium`, or `low`. |
+
+Exit codes: `0` success, `1` error, `2` bad command line, `3` severity gate tripped.
+
+Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` environment variables (`ARGUS_LEAD_MODEL`, `ARGUS_VERIFY_CONCURRENCY`, `ARGUS_LOG_FORMAT`, `ARGUS_LOG_LEVEL`, and so on; see `argus/settings.py`).
+
+### As a GitHub Action
+
+[`.github/workflows/review.yml`](.github/workflows/review.yml) reviews pull requests on this repository when they open or leave draft, and on demand for a PR number.
+It needs one repository secret, `CLAUDE_CODE_OAUTH_TOKEN`, and the workflow's own `GITHUB_TOKEN` with `pull-requests: write`.
+It does not run on every push, so a busy branch neither burns quota nor stacks duplicate reviews.
+
+## Development
+
+```bash
+uv sync                      # create .venv and install everything
+uv run ruff check .          # lint
+uv run ruff format --check . # format check
+uv run pytest -q             # unit tests, offline
+uv run pytest -m live -s     # opt-in: the real SDK against a seeded-bug fixture
+```
+
+The unit tests run without credentials or network: the pipeline is exercised through a fake agent, the runner through a recorded message stream, the GitHub client through `respx`, and the diff parser against fixtures that git itself generated.
+The live test builds a repository with a seeded SQL injection and an off-by-one on a feature branch and asserts Argus confirms a finding in one of the seeded files.
+
+Work ships in increments, each one branch, one pull request with its verification pasted in the body, and one squash-merge.
+Since the review workflow landed, every pull request is reviewed by Argus itself.
+
+## License
+
+MIT.
