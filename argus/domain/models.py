@@ -107,8 +107,10 @@ class StageMetrics(_Model):
     stage: str = Field(description='"review" or "verify:<finding_id>".')
     model: str
     cost_usd: float = Field(ge=0.0)
-    input_tokens: int = Field(ge=0)
+    input_tokens: int = Field(ge=0, description="Uncached input tokens.")
     output_tokens: int = Field(ge=0)
+    cache_creation_input_tokens: int = Field(default=0, ge=0)
+    cache_read_input_tokens: int = Field(default=0, ge=0)
     num_turns: int = Field(ge=0)
     duration_ms: int = Field(ge=0)
     subagents_run: int = Field(default=0, ge=0, description="Review stage only.")

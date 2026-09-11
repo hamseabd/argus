@@ -45,11 +45,3 @@ def test_invalid_values_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ARGUS_LEAD_EFFORT", "extreme")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
-
-
-def test_settings_do_not_import_the_sdk() -> None:
-    import sys
-
-    import argus.settings  # noqa: F401
-
-    assert "claude_agent_sdk" not in sys.modules

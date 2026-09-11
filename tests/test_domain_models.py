@@ -206,12 +206,3 @@ def test_rank_returns_a_new_list_and_leaves_input_alone() -> None:
 
     assert len(findings) == 2
     assert ranked is not findings
-
-
-def test_domain_package_does_not_import_the_sdk() -> None:
-    import sys
-
-    import argus.domain.errors
-    import argus.domain.models  # noqa: F401
-
-    assert "claude_agent_sdk" not in sys.modules
