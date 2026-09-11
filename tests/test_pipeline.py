@@ -97,7 +97,8 @@ def test_full_flow_assigns_final_statuses_and_totals(tmp_path: Path) -> None:
         "verify:correctness-1",
         "verify:correctness-2",
     ]
-    assert result.total_cost_usd == 1.2
+    assert result.total_cost_usd == 1.25  # the failed verification's $0.05 counts too
+    assert result.duration_ms > 0
     assert result.session_id == "sess"
     assert result.review.summary == "s"
 
@@ -166,3 +167,13 @@ def test_run_events_are_logged_with_a_run_id(tmp_path: Path) -> None:
     assert end["unverified"] == 1
     assert end["rejected"] == 0
     assert end["total_cost_usd"] == 1.1
+
+
+def test_a_caller_supplied_run_id_is_used(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    agent = FakeAgent(Review(summary="s", files_reviewed=[], findings=[]), {})
+
+    asyncio.run(run_review(context(tmp_path), agent, run_id="given-1"))
+
+    assert {json.loads(line)["run_id"] for line in stream.getvalue().splitlines()} == {"given-1"}

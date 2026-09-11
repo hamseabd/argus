@@ -34,6 +34,7 @@ def result(findings: list[Finding], verdicts: list[Verdict] | None = None) -> Re
             ),
         ],
         total_cost_usd=1.5,
+        duration_ms=70000,
         session_id="sess-1",
     )
 
@@ -127,6 +128,12 @@ def test_report_with_no_findings_says_so() -> None:
     assert "No findings." in text
     assert "Cost $1.50" in text
     assert "## " not in text
+
+
+def test_report_with_only_rejected_findings_says_so() -> None:
+    text = render_report(result([finding(status="rejected")]))
+
+    assert "No findings. 1 rejected and not shown." in text
 
 
 def test_report_counts_do_not_mention_absent_categories() -> None:

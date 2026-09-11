@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from argus.context.diff import DIFF_SIZE_CAP, FileDiff, cap_diff, commentable_index, parse_diff
+from argus.context.diff import (
+    DIFF_SIZE_CAP,
+    FileDiff,
+    cap_diff,
+    commentable_index,
+    diff_sections,
+    parse_diff,
+)
 from argus.domain.errors import ArgusError, DiffParseError
 from argus.domain.models import ChangedFile
 
@@ -148,6 +155,17 @@ def test_commentable_index_maps_path_to_lines() -> None:
         "pkg/new.py",
         "pkg/new_name.py",
     }
+
+
+def test_diff_sections_are_keyed_by_path_and_verbatim() -> None:
+    text = load("mixed.diff")
+
+    sections = diff_sections(text)
+
+    assert set(sections) >= {"pkg/module.py", "pkg/new.py", "img.bin"}
+    assert sections["pkg/module.py"].startswith("diff --git a/pkg/module.py")
+    assert "".join(sections.values()) == text
+    assert diff_sections("") == {}
 
 
 def test_cap_keeps_everything_when_it_fits() -> None:

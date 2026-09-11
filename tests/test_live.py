@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+import typer
 
 from argus.agent.review import SdkReviewAgent
 from argus.context.git import local_context
@@ -22,7 +23,7 @@ def test_seeded_bugs_are_found_and_confirmed(tmp_path: Path, capsys) -> None:
     result = asyncio.run(run_review(context, SdkReviewAgent(Settings())))
 
     with capsys.disabled():
-        print(render_report(result))
+        typer.echo(render_report(result))
     confirmed = [f for f in result.review.findings if f.status == "confirmed"]
     assert confirmed, "expected at least one confirmed finding"
     assert {f.file for f in confirmed} & set(SEEDED_FILES)

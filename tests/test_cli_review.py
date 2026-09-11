@@ -57,7 +57,8 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         calls["max_bytes"] = max_bytes
         return ReviewContext(source="local", repo_root=tmp_path, diff_text="", files=[])
 
-    async def fake_run_review(context, agent, *, verify=True, verify_concurrency=4):
+    async def fake_run_review(context, agent, *, verify=True, verify_concurrency=4, run_id=None):
+        calls["run_id"] = run_id
         calls["verify"] = verify
         calls["verify_concurrency"] = verify_concurrency
         calls["agent"] = agent
@@ -120,9 +121,9 @@ def test_json_artifact_is_written(stubbed: dict, tmp_path: Path) -> None:
 def test_fail_on_trips_for_confirmed_or_unverified_at_or_above_the_severity(stubbed: dict) -> None:
     stubbed["outcome"] = fake_result([finding("medium", status="unverified")])
 
-    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "medium"]).exit_code == 2
+    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "medium"]).exit_code == 3
     assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "high"]).exit_code == 0
-    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "low"]).exit_code == 2
+    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "low"]).exit_code == 3
 
 
 def test_fail_on_ignores_rejected_findings(stubbed: dict) -> None:
@@ -134,8 +135,35 @@ def test_fail_on_ignores_rejected_findings(stubbed: dict) -> None:
 def test_fail_on_rejects_unknown_severity(stubbed: dict) -> None:
     result = runner.invoke(cli.app, ["review", "--diff", "--fail-on", "urgent"])
 
-    assert result.exit_code == 2  # typer usage error
+    assert result.exit_code == 2  # Click's usage-error code, distinct from the gate's 3
     assert "urgent" in result.output
+
+
+def test_gate_and_usage_exit_codes_differ() -> None:
+    assert cli.EXIT_GATE != cli.EXIT_USAGE
+
+
+def test_invalid_settings_fail_cleanly(stubbed: dict, monkeypatch) -> None:
+    monkeypatch.setenv("ARGUS_VERIFY_CONCURRENCY", "abc")
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 1
+    assert "verify_concurrency" in result.output
+    assert "Traceback" not in result.output
+    assert "agent" not in stubbed
+
+
+def test_every_log_event_carries_the_same_run_id(stubbed: dict, tmp_path: Path) -> None:
+    stubbed["outcome"] = fake_result([finding("low")])
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--json", str(tmp_path / "r.json")])
+
+    assert result.exit_code == 0, result.output
+    events = [json.loads(line) for line in result.stderr.splitlines() if line.startswith("{")]
+    assert "artifact_written" in [e["event"] for e in events]
+    assert len({e.get("run_id") for e in events}) == 1
+    assert None not in {e.get("run_id") for e in events}
 
 
 def test_agent_errors_exit_one_with_the_subtype_and_cost(stubbed: dict) -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import ValidationError
 
 from argus import __version__, telemetry
 from argus.auth import credential_problem, credential_source
@@ -16,7 +17,8 @@ from argus.report.markdown import render_report
 from argus.settings import Settings
 
 EXIT_ERROR = 1
-EXIT_GATE = 2
+EXIT_USAGE = 2  # Click's own code for a bad command line; kept distinct from the gate
+EXIT_GATE = 3
 
 app = typer.Typer(
     help="Argus: a code-review agent on the Claude Agent SDK.",
@@ -49,11 +51,14 @@ def review(
     fail_on: Annotated[
         str | None,
         typer.Option(
-            "--fail-on", help="Exit 2 if any reported finding is at or above this severity."
+            "--fail-on", help="Exit 3 if any reported finding is at or above this severity."
         ),
     ] = None,
 ) -> None:
-    """Review a change and print the findings."""
+    """Review a change and print the findings.
+
+    Exit codes: 0 success, 1 error, 2 bad command line, 3 severity gate tripped.
+    """
     if not diff:
         raise typer.BadParameter("choose a mode: --diff")
     if fail_on is not None and fail_on not in SEVERITY_ORDER:
@@ -61,11 +66,18 @@ def review(
             f"{fail_on!r} is not a severity; expected one of {', '.join(SEVERITY_ORDER)}",
             param_hint="--fail-on",
         )
-    settings = Settings()
+    telemetry.configure()
+    run_id = telemetry.new_run_id()
+    telemetry.bind_run(run_id=run_id)
+    try:
+        settings = Settings()
+    except ValidationError as exc:
+        _fail(f"invalid ARGUS_* setting: {_settings_problem(exc)}")
     telemetry.configure(settings.log_format, level=settings.log_level)
+    telemetry.bind_run(run_id=run_id)
     _check_credentials()
 
-    from argus.agent.review import SdkReviewAgent
+    from argus.agent.review import SdkReviewAgent  # keep the SDK import lazy
 
     try:
         context = local_context(Path.cwd(), base, settings.diff_size_cap)
@@ -75,6 +87,7 @@ def review(
                 SdkReviewAgent(settings),
                 verify=not no_verify,
                 verify_concurrency=settings.verify_concurrency,
+                run_id=run_id,
             )
         )
     except ArgusError as exc:
@@ -106,6 +119,12 @@ def _write_json(path: Path, result: ReviewResult) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(result.model_dump_json(indent=2) + "\n")
     telemetry.get_logger().info("artifact_written", path=str(path))
+
+
+def _settings_problem(exc: ValidationError) -> str:
+    return "; ".join(
+        f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in exc.errors()
+    )
 
 
 def _fail(message: str) -> None:

@@ -81,6 +81,12 @@ def test_with_status_returns_a_new_finding_and_leaves_the_original() -> None:
     assert confirmed.model_dump(exclude={"status"}) == original.model_dump(exclude={"status"})
 
 
+def test_location_shows_a_range_only_when_it_spans_lines() -> None:
+    assert finding(line=10).location == "pkg/module.py:10"
+    assert finding(line=10, end_line=10).location == "pkg/module.py:10"
+    assert finding(line=10, end_line=12).location == "pkg/module.py:10-12"
+
+
 def test_finding_is_immutable() -> None:
     with pytest.raises(ValidationError):
         finding().status = "confirmed"  # type: ignore[misc]

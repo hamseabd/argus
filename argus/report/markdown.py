@@ -14,9 +14,6 @@ def render_report(result: ReviewResult) -> str:
 
 
 def _counts(shown: list[Finding], rejected: int) -> str:
-    hidden = f" {rejected} rejected and not shown." if rejected else ""
-    if not shown:
-        return "No findings." + hidden
     counts = [
         f"{n} {status}"
         for status in ("confirmed", "unverified")
@@ -24,18 +21,17 @@ def _counts(shown: list[Finding], rejected: int) -> str:
     ]
     if rejected:
         counts.append(f"{rejected} rejected and not shown")
+    if not shown:
+        return "No findings." + (f" {counts[0]}." if counts else "")
     noun = "finding" if len(shown) == 1 else "findings"
     return f"{len(shown)} {noun}: {', '.join(counts)}."
 
 
 def _finding_block(finding: Finding) -> str:
-    location = f"{finding.file}:{finding.line}"
-    if finding.end_line is not None and finding.end_line != finding.line:
-        location += f"-{finding.end_line}"
     lines = [
         f"## [{finding.severity.upper()}] {finding.title}",
         "",
-        f"`{location}` · {finding.category} · {finding.status}"
+        f"`{finding.location}` · {finding.category} · {finding.status}"
         f" · confidence {finding.confidence:.2f}",
         "",
         finding.description.strip(),
@@ -53,7 +49,7 @@ def _footer(result: ReviewResult) -> str:
     total_input = sum(m.input_tokens for m in metrics) + cached
     output = sum(m.output_tokens for m in metrics)
     turns = sum(m.num_turns for m in metrics)
-    seconds = sum(m.duration_ms for m in metrics) / 1000
+    seconds = result.duration_ms / 1000
     subagents = sum(m.subagents_run for m in metrics)
     return (
         f"Cost ${result.total_cost_usd:.2f} · {total_input:,} input tokens ({cached:,} cached) · "

@@ -54,6 +54,13 @@ class Finding(_Model):
     def with_status(self, status: Status) -> "Finding":
         return self.model_copy(update={"status": status})
 
+    @property
+    def location(self) -> str:
+        """`path:line` or `path:start-end`, as reports and prompts show it."""
+        if self.end_line is not None and self.end_line != self.line:
+            return f"{self.file}:{self.line}-{self.end_line}"
+        return f"{self.file}:{self.line}"
+
 
 class Review(_Model):
     """The lead reviewer's merged output."""
@@ -122,7 +129,8 @@ class ReviewResult(_Model):
     review: Review = Field(description="Findings carry their final status.")
     verdicts: list[Verdict]
     metrics: list[StageMetrics]
-    total_cost_usd: float = Field(ge=0.0)
+    total_cost_usd: float = Field(ge=0.0, description="Every query, failed ones included.")
+    duration_ms: int = Field(default=0, ge=0, description="Wall-clock time of the whole run.")
     session_id: str
 
 

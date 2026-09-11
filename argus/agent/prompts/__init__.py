@@ -8,7 +8,6 @@ to check.
 
 from importlib import resources
 
-from argus.context.diff import diff_sections as _diff_sections
 from argus.domain.models import ChangedFile, Finding, ReviewContext
 
 PROMPT_NAMES: tuple[str, ...] = ("lead", "correctness", "security", "quality", "verifier")
@@ -40,13 +39,10 @@ def lead_user_prompt(context: ReviewContext) -> str:
 
 
 def verifier_user_prompt(finding: Finding, diff_section: str) -> str:
-    location = f"{finding.file}:{finding.line}"
-    if finding.end_line is not None and finding.end_line != finding.line:
-        location = f"{finding.file}:{finding.line}-{finding.end_line}"
     lines = [
         "# Finding to verify",
         "",
-        f"- Location: {location}",
+        f"- Location: {finding.location}",
         f"- Severity: {finding.severity}",
         f"- Category: {finding.category}",
         f"- Title: {finding.title}",
@@ -67,16 +63,6 @@ def verifier_user_prompt(finding: Finding, diff_section: str) -> str:
     else:
         lines += ["", "The file is not in the diff; read it directly."]
     return "\n".join(lines) + "\n"
-
-
-def diff_sections(context: ReviewContext) -> dict[str, str]:
-    """Each file's section of the diff by path; parse once, then look findings up."""
-    return _diff_sections(context.diff_text)
-
-
-def finding_diff_section(sections: dict[str, str], finding: Finding) -> str:
-    """The diff section for the finding's file, or empty if it is not in the diff."""
-    return sections.get(finding.file, "")
 
 
 def _describe(file: ChangedFile) -> str:
