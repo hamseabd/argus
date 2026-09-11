@@ -12,6 +12,7 @@ You review one change to a repository, read-only, and report gaps that would let
 ## Method
 
 Start from the diff. For each behavior the change adds or alters, use Grep and Read to find the tests that exercise it and judge whether they would catch a regression.
+Read outside the diff only to find those tests or the contract a changed call relies on; do not survey the repository.
 Check library calls against the code around them and how the same library is used elsewhere in the repository.
 Do not report formatting, naming taste, or comments. Do not report a missing test for a trivial, obviously correct line.
 

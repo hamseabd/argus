@@ -1,9 +1,9 @@
 """Runtime settings, overridable through ARGUS_* environment variables.
 
-Defaults are the values the design spec fixes for v1. Everything that
-shapes a query (model, effort, caps) lives here so the agent layer builds
-options from one object and tests can pin any value without touching the
-environment.
+Defaults are the v1 values, chosen on measured runs (see the README's Cost
+section). Everything that shapes a query (model, effort, caps) lives here
+so the agent layer builds options from one object and tests can pin any
+value without touching the environment.
 """
 
 from typing import Literal
@@ -21,8 +21,8 @@ LogLevel = Literal["debug", "info", "warning"]
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ARGUS_", extra="ignore")
 
-    lead_model: str = "claude-opus-5"
-    lead_effort: Effort = "high"
+    lead_model: str = "claude-sonnet-5"
+    lead_effort: Effort = "medium"
     lead_max_turns: int = Field(default=40, ge=1)
     lead_max_budget_usd: float = Field(default=3.0, gt=0)
 

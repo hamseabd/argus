@@ -22,8 +22,8 @@ def test_lead_options_follow_the_spec(tmp_path: Path) -> None:
     opts = lead_options(settings(), context(tmp_path), HookState())
 
     assert isinstance(opts, ClaudeAgentOptions)
-    assert opts.model == "claude-opus-5"
-    assert opts.effort == "high"
+    assert opts.model == "claude-sonnet-5"
+    assert opts.effort == "medium"
     assert opts.max_turns == 40
     assert opts.max_budget_usd == 3.0
     assert opts.permission_mode == "dontAsk"
@@ -85,9 +85,9 @@ def test_verifier_options_follow_the_spec(tmp_path: Path) -> None:
 
 
 def test_settings_overrides_reach_the_options(tmp_path: Path) -> None:
-    custom = Settings(_env_file=None, lead_model="claude-sonnet-5", lead_max_budget_usd=1.0)
+    custom = Settings(_env_file=None, lead_model="claude-opus-5", lead_max_budget_usd=1.0)
 
     opts = lead_options(custom, context(tmp_path), HookState())
 
-    assert opts.model == "claude-sonnet-5"
+    assert opts.model == "claude-opus-5"
     assert opts.max_budget_usd == 1.0
