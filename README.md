@@ -92,13 +92,13 @@ The SDK still reports what the same run would have cost on the API, and the JSON
 |---|---|---|---|
 | [PR #7](https://github.com/hamseabd/argus/pull/7#pullrequestreview-5174291207): 2 files, 6 findings, 6 verifications | $2.34 | 306 s | 48 |
 | [PR #8](https://github.com/hamseabd/argus/pull/8#pullrequestreview-5178840171): 3 files, 0 findings | $1.37 | 128 s | 22 |
-| PR #8 again with the current prompts and a Sonnet lead, run locally: 1 finding, 1 verification | $0.73 | 181 s | 7 |
+| PR #8 with the current prompts and a Sonnet lead: 1 finding, 1 verification | $0.73 | 181 s | 7 |
 
 Most of the input is cache reads: 805,554 of 805,620 input tokens on PR #7.
 The first two runs let the lead re-check findings itself, and it did: 22 to 26 Opus turns re-reading code, $0.88 of the $1.37 on PR #8.
-The verify stage already does that job, so the lead now delegates, merges, and returns; its own thread costs a few cents, and the three specialists are the bulk of a review.
-An Opus lead with the same prompts cost $1.02 on the same diff and delegated more cleanly; for a project that reviews a handful of pull requests the cheaper lead wins, so everything runs on Sonnet.
-Specialist cost varied from $0.48 to $0.94 across three runs of the same diff; the SDK result does not expose per-subagent usage, so instrumenting that comes before tuning them.
+That is the verify stage's job, so the lead now delegates, merges, and returns, and its own thread costs a few cents.
+What remains of the lead's work does not need the larger model: on the same diff an Opus lead cost $1.02 and confirmed the same finding, so everything runs on Sonnet.
+The three specialists are now the bulk of a review and vary the most between runs ($0.48 to $0.94 on the same diff); the SDK result does not expose per-subagent usage, so instrumenting that comes before tuning them.
 Caps keep a runaway review short: the lead stops at 40 turns or $3.00, each verifier at 10 turns or $0.50.
 
 ## Usage
