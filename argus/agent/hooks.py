@@ -26,7 +26,12 @@ DENIED_TOOLS = frozenset(
 DENIED_TOOL_MATCHER = "|".join(sorted(DENIED_TOOLS))
 ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Agent", GIT_HISTORY_TOOL_NAME)
 STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
-"""The SDK's internal tool that validates the final answer against the output schema."""
+"""The SDK's internal tool that validates the final answer against the output schema.
+
+The name comes from the bundled CLI, not the Python package, so nothing here
+can pin it. If it ever changes the count silently reads zero; the schema's
+length floor, not this counter, is what keeps a placeholder out of a review.
+"""
 
 _INPUT_SUMMARY_CHARS = 200
 
