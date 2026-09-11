@@ -33,7 +33,11 @@ class SdkReviewAgent:
         try:
             review = Review.model_validate(outcome.structured_output)
         except ValidationError as exc:
-            raise ReviewProtocolError(f"review: output is not a valid Review: {exc}") from exc
+            raise ReviewProtocolError(
+                f"review: output is not a valid Review: {exc}",
+                cost_usd=outcome.metrics.cost_usd,
+                session_id=outcome.session_id,
+            ) from exc
         if state.subagents_started < len(SPECIALISTS):
             get_logger().warning(
                 "specialists_missing", expected=len(SPECIALISTS), ran=state.subagents_started
@@ -50,10 +54,15 @@ class SdkReviewAgent:
             verifier_user_prompt(finding, diff_section), options, stage=stage, state=state
         )
         payload = outcome.structured_output
+        cost, session = outcome.metrics.cost_usd, outcome.session_id
         if not isinstance(payload, dict):
-            raise ReviewProtocolError(f"{stage}: output is not a valid Verdict: not an object")
+            raise ReviewProtocolError(
+                f"{stage}: output is not a valid Verdict: not an object", cost, session
+            )
         try:
             verdict = Verdict.model_validate({**payload, "finding_id": finding.id})
         except ValidationError as exc:
-            raise ReviewProtocolError(f"{stage}: output is not a valid Verdict: {exc}") from exc
+            raise ReviewProtocolError(
+                f"{stage}: output is not a valid Verdict: {exc}", cost, session
+            ) from exc
         return StageOutcome(verdict, outcome.metrics, outcome.session_id)

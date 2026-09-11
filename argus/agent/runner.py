@@ -87,7 +87,9 @@ class SdkRunner:
             raise AgentRunError(subtype=subtype, cost_usd=cost, session_id=result.session_id)
         if result.structured_output is None:
             raise ReviewProtocolError(
-                f"{stage}: the query succeeded but returned no structured output"
+                f"{stage}: the query succeeded but returned no structured output",
+                cost_usd=cost,
+                session_id=result.session_id,
             )
         usage = result.usage or {}
         metrics = StageMetrics(

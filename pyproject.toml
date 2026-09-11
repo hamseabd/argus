@@ -8,6 +8,7 @@ requires-python = ">=3.12"
 authors = [{ name = "Hamse Abdi", email = "hmseabd@gmail.com" }]
 dependencies = [
     "claude-agent-sdk>=0.2.152",
+    "httpx>=0.28",
     "pydantic>=2.11",
     "pydantic-settings>=2.10",
     "structlog>=25",
@@ -21,6 +22,7 @@ argus = "argus.cli:app"
 dev = [
     "jsonschema>=4.23",
     "pytest>=8.4",
+    "respx>=0.22",
     "ruff>=0.13",
 ]
 

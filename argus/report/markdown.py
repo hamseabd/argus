@@ -1,19 +1,21 @@
-"""Terminal report: Markdown a person reads at the end of a run."""
+"""Markdown rendering shared by the terminal report and the GitHub review."""
 
 from argus.domain.models import Finding, ReviewResult, rank_findings
 
 
 def render_report(result: ReviewResult) -> str:
-    shown = rank_findings(result.review.findings)
-    rejected = sum(f.status == "rejected" for f in result.review.findings)
-    parts = ["# Argus review", result.review.summary.strip(), _counts(shown, rejected)]
-    parts.extend(_finding_block(f) for f in shown)
+    """The terminal report: summary, ranked findings, metrics footer."""
+    parts = ["# Argus review", result.review.summary.strip(), render_counts(result.review.findings)]
+    parts.extend(render_finding(f) for f in rank_findings(result.review.findings))
     parts.append("---")
-    parts.append(_footer(result))
+    parts.append(render_footer(result))
     return "\n\n".join(parts) + "\n"
 
 
-def _counts(shown: list[Finding], rejected: int) -> str:
+def render_counts(findings: list[Finding]) -> str:
+    """One line: how many findings are shown, by status, and how many were rejected."""
+    shown = rank_findings(findings)
+    rejected = sum(f.status == "rejected" for f in findings)
     counts = [
         f"{n} {status}"
         for status in ("confirmed", "unverified")
@@ -27,23 +29,30 @@ def _counts(shown: list[Finding], rejected: int) -> str:
     return f"{len(shown)} {noun}: {', '.join(counts)}."
 
 
-def _finding_block(finding: Finding) -> str:
+def render_finding(finding: Finding, heading: str = "##") -> str:
+    """A finding as a titled section with its location on the line below."""
     lines = [
-        f"## [{finding.severity.upper()}] {finding.title}",
+        f"{heading} [{finding.severity.upper()}] {finding.title}",
         "",
-        f"`{finding.location}` · {finding.category} · {finding.status}"
-        f" · confidence {finding.confidence:.2f}",
+        f"`{finding.location}` · {_meta(finding)}",
         "",
-        finding.description.strip(),
-        "",
-        f"**Evidence:** {finding.evidence.strip()}",
+        *_details(finding),
     ]
-    if finding.suggested_fix:
-        lines += ["", "**Suggested fix:**", "", "```", finding.suggested_fix.strip(), "```"]
     return "\n".join(lines)
 
 
-def _footer(result: ReviewResult) -> str:
+def finding_body(finding: Finding) -> str:
+    """A finding as an inline comment body; the location is the comment's anchor."""
+    return "\n".join(
+        [
+            f"**[{finding.severity.upper()}] {finding.title}** · {_meta(finding)}",
+            "",
+            *_details(finding),
+        ]
+    )
+
+
+def render_footer(result: ReviewResult) -> str:
     metrics = result.metrics
     cached = sum(m.cache_creation_input_tokens + m.cache_read_input_tokens for m in metrics)
     total_input = sum(m.input_tokens for m in metrics) + cached
@@ -56,3 +65,14 @@ def _footer(result: ReviewResult) -> str:
         f"{output:,} output tokens · {turns} turns · {seconds:.1f} s · {subagents} subagents · "
         f"session {result.session_id}"
     )
+
+
+def _meta(finding: Finding) -> str:
+    return f"{finding.category} · {finding.status} · confidence {finding.confidence:.2f}"
+
+
+def _details(finding: Finding) -> list[str]:
+    lines = [finding.description.strip(), "", f"**Evidence:** {finding.evidence.strip()}"]
+    if finding.suggested_fix:
+        lines += ["", "**Suggested fix:**", "", "```", finding.suggested_fix.strip(), "```"]
+    return lines

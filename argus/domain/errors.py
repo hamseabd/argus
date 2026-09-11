@@ -23,17 +23,28 @@ class AgentRunError(ArgusError):
 
 
 class ReviewProtocolError(ArgusError):
-    """A query succeeded but did not return the structured output it promised."""
+    """A query succeeded but did not return the structured output it promised.
+
+    The query was still paid for, so the cost travels with the error.
+    """
+
+    def __init__(self, message: str, cost_usd: float = 0.0, session_id: str | None = None) -> None:
+        self.cost_usd = cost_usd
+        self.session_id = session_id
+        super().__init__(message)
 
 
 class GitHubError(ArgusError):
-    """The GitHub API answered with a non-2xx status."""
+    """The GitHub API answered with a non-2xx status, or could not be reached (status None)."""
 
-    def __init__(self, status: int, body: str) -> None:
+    def __init__(self, status: int | None, body: str) -> None:
         self.status = status
         self.body = body
         preview = body if len(body) <= _BODY_PREVIEW_CHARS else body[:_BODY_PREVIEW_CHARS] + "..."
-        super().__init__(f"GitHub responded {status}: {preview}")
+        if status is None:
+            super().__init__(f"GitHub request failed: {preview}")
+        else:
+            super().__init__(f"GitHub responded {status}: {preview}")
 
 
 class GitError(ArgusError):

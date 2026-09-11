@@ -15,8 +15,6 @@ are reported as such rather than attributed to an older commit.
 
 import asyncio
 import json
-import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +27,9 @@ from claude_agent_sdk import (
 )
 
 from argus import __version__
+from argus.context.diff import HUNK_HEADER
+from argus.context.git import run_git
+from argus.domain.errors import GitError
 
 SERVER_NAME = "argus"
 TOOL_NAME = "git_history"
@@ -42,7 +43,6 @@ UNCOMMITTED: dict[str, str] = {
 }
 _FIELD_SEP = "\x1f"
 _RECORD_SEP = "\x1e"
-_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 Hunk = tuple[int, int, int, int]
 """(old_start, old_len, new_start, new_len) of one uncommitted hunk."""
@@ -64,7 +64,7 @@ def git_history(repo_root: Path, path: str, start_line: int, end_line: int) -> l
     if not target.is_relative_to(root):
         raise ValueError(f"{path} is outside the repository")
     relative = target.relative_to(root).as_posix()
-    if _run(root, "ls-files", "--error-unmatch", "--", relative).returncode != 0:
+    if not _tracked(root, relative):
         return []
     hunks = _uncommitted_hunks(root, relative)
     entries: list[dict[str, str]] = []
@@ -78,17 +78,19 @@ def git_history(repo_root: Path, path: str, start_line: int, end_line: int) -> l
         return entries
     if head_end > head_lines:
         raise ValueError(f"{path} has only {head_lines} lines; asked for {start_line}-{end_line}")
-    completed = _run(
-        root,
-        "log",
-        "--no-patch",
-        f"--max-count={MAX_COMMITS}",
-        f"--format=%H{_FIELD_SEP}%aI{_FIELD_SEP}%an{_FIELD_SEP}%s{_RECORD_SEP}",
-        f"-L{head_start},{head_end}:{relative}",
-    )
-    if completed.returncode != 0:
-        raise ValueError(completed.stderr.strip() or "git log failed")
-    for record in completed.stdout.split(_RECORD_SEP):
+    try:
+        output = run_git(
+            root,
+            "log",
+            "--no-patch",
+            f"--max-count={MAX_COMMITS}",
+            f"--format=%H{_FIELD_SEP}%aI{_FIELD_SEP}%an{_FIELD_SEP}%s{_RECORD_SEP}",
+            f"-L{head_start},{head_end}:{relative}",
+            strip=False,
+        )
+    except GitError as exc:
+        raise ValueError(str(exc)) from exc
+    for record in output.split(_RECORD_SEP):
         record = record.strip()
         if not record:
             continue
@@ -128,32 +130,32 @@ def build_argus_server(repo_root: Path) -> McpSdkServerConfig:
     )
 
 
-def _run(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(root), *args],
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+def _tracked(root: Path, relative: str) -> bool:
+    try:
+        run_git(root, "ls-files", "--error-unmatch", "--", relative)
+    except GitError:
+        return False
+    return True
 
 
 def _uncommitted_hunks(root: Path, relative: str) -> list[Hunk]:
     """Hunks between HEAD and the working tree for one file, in file order."""
-    completed = _run(root, "diff", "-U0", "--no-color", "--no-ext-diff", "HEAD", "--", relative)
-    if completed.returncode != 0:
+    try:
+        output = run_git(
+            root, "diff", "-U0", "--no-color", "--no-ext-diff", "HEAD", "--", relative, strip=False
+        )
+    except GitError:
         return []
     hunks: list[Hunk] = []
-    for line in completed.stdout.splitlines():
-        match = _HUNK.match(line)
+    for line in output.splitlines():
+        match = HUNK_HEADER.match(line)
         if match:
-            old_start, old_len, new_start, new_len = match.groups()
             hunks.append(
                 (
-                    int(old_start),
-                    1 if old_len is None else int(old_len),
-                    int(new_start),
-                    1 if new_len is None else int(new_len),
+                    int(match["old_start"]),
+                    1 if match["old_len"] is None else int(match["old_len"]),
+                    int(match["new_start"]),
+                    1 if match["new_len"] is None else int(match["new_len"]),
                 )
             )
     return hunks
@@ -186,8 +188,8 @@ def _to_head(hunks: list[Hunk], line: int, *, at_end: bool) -> int:
 
 
 def _head_line_count(root: Path, relative: str) -> int | None:
-    completed = _run(root, "show", f"HEAD:{relative}")
-    if completed.returncode != 0:
+    try:
+        text = run_git(root, "show", f"HEAD:{relative}", strip=False)
+    except GitError:
         return None
-    text = completed.stdout
     return text.count("\n") + (1 if text and not text.endswith("\n") else 0)

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from argus.context.diff import diff_sections
-from argus.domain.errors import AgentRunError, ArgusError
+from argus.domain.errors import AgentRunError, ArgusError, ReviewProtocolError
 from argus.domain.models import (
     Finding,
     Review,
@@ -26,6 +26,8 @@ from argus.domain.models import (
 from argus.telemetry import bind_run, get_logger, new_run_id
 
 DEFAULT_VERIFY_CONCURRENCY = 4
+PAID_ERRORS = (AgentRunError, ReviewProtocolError)
+"""Errors raised after a query was billed; they carry cost_usd."""
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,13 @@ class StageOutcome[T]:
     value: T
     metrics: StageMetrics
     session_id: str
+
+
+@dataclass(frozen=True)
+class VerifyFailure:
+    """A verification that did not produce a verdict, and what it cost anyway."""
+
+    cost_usd: float
 
 
 class ReviewAgent(Protocol):
@@ -77,8 +86,8 @@ async def run_review(
     if verify and review.findings:
         outcomes = await _verify_all(context, agent, review.findings, verify_concurrency)
         for finding, outcome in zip(review.findings, outcomes, strict=True):
-            if isinstance(outcome, float):
-                failed_cost += outcome
+            if isinstance(outcome, VerifyFailure):
+                failed_cost += outcome.cost_usd
                 continue
             verdicts.append(outcome.value)
             metrics.append(outcome.metrics)
@@ -109,7 +118,7 @@ async def _verify_all(
     agent: ReviewAgent,
     findings: Sequence[Finding],
     concurrency: int,
-) -> list[StageOutcome[Verdict] | float]:
+) -> list[StageOutcome[Verdict] | VerifyFailure]:
     """One verifier query per finding, at most `concurrency` at a time.
 
     A failed verification never aborts the run: the finding stays unverified,
@@ -119,15 +128,15 @@ async def _verify_all(
     sections = diff_sections(context.diff_text)
     semaphore = asyncio.Semaphore(concurrency)
 
-    async def one(finding: Finding) -> StageOutcome[Verdict] | float:
+    async def one(finding: Finding) -> StageOutcome[Verdict] | VerifyFailure:
         async with semaphore:
             try:
                 return await agent.verify(context, finding, sections.get(finding.file, ""))
             except ArgusError as exc:
-                cost = exc.cost_usd if isinstance(exc, AgentRunError) else 0.0
+                cost = float(exc.cost_usd) if isinstance(exc, PAID_ERRORS) else 0.0
                 get_logger().warning(
                     "verify_failed", finding=finding.id, error=str(exc), cost_usd=cost
                 )
-                return cost
+                return VerifyFailure(cost)
 
     return await asyncio.gather(*(one(f) for f in findings))

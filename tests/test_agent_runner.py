@@ -100,9 +100,12 @@ def test_api_error_under_a_success_subtype_is_still_an_error() -> None:
         asyncio_run(run(runner_for([result(is_error=True, api_error_status=529)])))
 
 
-def test_success_without_structured_output_is_a_protocol_error() -> None:
-    with pytest.raises(ReviewProtocolError):
+def test_success_without_structured_output_is_a_protocol_error_that_carries_cost() -> None:
+    with pytest.raises(ReviewProtocolError) as info:
         asyncio_run(run(runner_for([result(structured_output=None)])))
+
+    assert info.value.cost_usd == 0.42
+    assert info.value.session_id == "sess-1"
 
 
 def test_no_result_message_is_a_protocol_error() -> None:

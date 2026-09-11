@@ -6,7 +6,14 @@ from typer.testing import CliRunner
 
 from argus import cli
 from argus.domain.errors import AgentRunError
-from argus.domain.models import Finding, Review, ReviewContext, ReviewResult, StageMetrics
+from argus.domain.models import (
+    ChangedFile,
+    Finding,
+    Review,
+    ReviewContext,
+    ReviewResult,
+    StageMetrics,
+)
 
 runner = CliRunner()
 
@@ -55,7 +62,12 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     def fake_local_context(path: Path, base: str = "main", max_bytes: int = 0) -> ReviewContext:
         calls["base"] = base
         calls["max_bytes"] = max_bytes
-        return ReviewContext(source="local", repo_root=tmp_path, diff_text="", files=[])
+        return ReviewContext(
+            source="local",
+            repo_root=tmp_path,
+            diff_text=calls.get("diff_text", "+x\n"),
+            files=calls.get("files", [ChangedFile(path="a.py", status="modified")]),
+        )
 
     async def fake_run_review(context, agent, *, verify=True, verify_concurrency=4, run_id=None):
         calls["run_id"] = run_id
@@ -198,3 +210,14 @@ def test_git_errors_exit_one(stubbed: dict, monkeypatch) -> None:
 
     assert result.exit_code == 1
     assert "nope" in result.output
+
+
+def test_an_empty_diff_fails_before_any_query(stubbed: dict) -> None:
+    stubbed["diff_text"] = ""
+    stubbed["files"] = []
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 1
+    assert "nothing to review" in result.output
+    assert "agent" not in stubbed
