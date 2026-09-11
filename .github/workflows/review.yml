@@ -4,6 +4,13 @@ name: argus-review
 # opened or leaves draft, and on demand for a given PR number. It does not
 # run on every push (synchronize) so a busy branch neither burns quota nor
 # stacks duplicate reviews.
+#
+# Trust model: Argus itself is installed and run from the default branch.
+# The pull request head is checked out into a separate directory that is
+# only read, never installed or executed, so a PR cannot run its own code
+# next to the subscription token. Pull requests from forks are skipped on
+# the pull_request event because GitHub gives them no secrets and a
+# read-only token; a maintainer can still review one on demand.
 
 on:
   pull_request:
@@ -23,15 +30,26 @@ concurrency:
   group: argus-${{ github.event.pull_request.number || inputs.pr }}
   cancel-in-progress: true
 
+env:
+  PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+
 jobs:
   review:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out Argus from the default branch (trusted)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The PR head itself, not the merge commit, so line numbers match the diff.
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Check out the pull request head (reviewed, never executed)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pr) }}
+          path: target
           # Full history: the git_history tool asks which commits touched a line.
           fetch-depth: 0
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -40,17 +58,17 @@ jobs:
       - name: Install
         run: uv sync --frozen
       - name: Review
+        working-directory: target
         run: >-
-          uv run argus review
-          --pr ${{ github.event.pull_request.number || inputs.pr }}
-          --post --json argus-review.json
+          uv run --project "$GITHUB_WORKSPACE" argus review
+          --pr "$PR_NUMBER" --post --json "$GITHUB_WORKSPACE/argus-review.json"
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ARGUS_LOG_FORMAT: json
       - name: Keep the review record
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: argus-review
           path: argus-review.json
