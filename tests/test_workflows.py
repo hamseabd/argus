@@ -24,8 +24,8 @@ def test_review_runs_on_open_and_ready_only_never_on_every_push() -> None:
     assert on["workflow_dispatch"]["inputs"]["pr"]["required"] is True
 
 
-def test_review_permissions_are_minimal() -> None:
-    assert load("review.yml")["permissions"] == {"contents": "read", "pull-requests": "write"}
+def test_the_workflow_token_is_read_only() -> None:
+    assert load("review.yml")["permissions"] == {"contents": "read"}
 
 
 def test_review_cancels_a_superseded_run_for_the_same_pr() -> None:
@@ -92,6 +92,21 @@ def test_review_step_uses_only_the_subscription_token_and_posts_with_an_artifact
     assert "--post" in review["run"] and "--json" in review["run"]
     assert upload["if"] == "always()"
     assert upload["with"]["path"] == "argus-review.json"
+
+
+def test_the_review_is_posted_as_the_argus_app() -> None:
+    all_steps = steps("review.yml", "review")
+    mint = next(s for s in all_steps if "create-github-app-token@" in s.get("uses", ""))
+    review = next(s for s in all_steps if s.get("name") == "Review")
+
+    assert mint["id"] == "argus-app"
+    assert mint["with"] == {
+        "app-id": "${{ secrets.ARGUS_APP_ID }}",
+        "private-key": "${{ secrets.ARGUS_APP_PRIVATE_KEY }}",
+    }
+    assert all_steps.index(mint) == all_steps.index(review) - 1  # shortest token lifetime
+    assert review["env"]["GITHUB_TOKEN"] == "${{ steps.argus-app.outputs.token }}"
+    assert "secrets.GITHUB_TOKEN" not in (WORKFLOWS / "review.yml").read_text()
 
 
 def test_no_workflow_mentions_an_api_key() -> None:

@@ -131,8 +131,10 @@ Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` en
 ### As a GitHub Action
 
 [`.github/workflows/review.yml`](.github/workflows/review.yml) reviews pull requests on this repository when they open or leave draft, and on demand for a PR number.
-It needs one repository secret, `CLAUDE_CODE_OAUTH_TOKEN`, and the workflow's own `GITHUB_TOKEN` with `pull-requests: write`.
 It does not run on every push, so a busy branch neither burns quota nor stacks duplicate reviews.
+The review is posted by a GitHub App named Argus, through an installation token minted just before the review step and revoked when the job ends, so it appears under Argus's own name and the workflow's own token stays read-only.
+The workflow needs three repository secrets: `CLAUDE_CODE_OAUTH_TOKEN`, and the app's `ARGUS_APP_ID` and `ARGUS_APP_PRIVATE_KEY`.
+The app needs `Pull requests: Read and write` and `Contents: Read-only`, and must be installed on the repository.
 
 #### Reviewing another repository
 
