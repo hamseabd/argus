@@ -7,7 +7,7 @@ each of those ids stands for; the tool hooks count calls and time per
 subagent id. The result is one AgentMetrics per agent type, lead first.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from claude_agent_sdk import AssistantMessage, ToolUseBlock
 
@@ -24,6 +24,8 @@ class _Tally:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    seen: set[str] = field(default_factory=set)
+    """API message ids already counted; the stream repeats one per content block."""
 
 
 class AgentLedger:
@@ -35,6 +37,10 @@ class AgentLedger:
         if message.parent_tool_use_id is None:
             self._note_delegations(message)
         tally = self._tallies.setdefault(self._name(message.parent_tool_use_id), _Tally())
+        if message.message_id is not None:
+            if message.message_id in tally.seen:
+                return
+            tally.seen.add(message.message_id)
         usage = message.usage or {}
         tally.turns += 1
         tally.output_tokens += usage.get("output_tokens") or 0

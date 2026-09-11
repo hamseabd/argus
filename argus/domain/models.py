@@ -112,7 +112,7 @@ class AgentMetrics(_Model):
     """One agent's share of a query: the lead thread or one subagent type."""
 
     agent: str = Field(description='"lead" or the subagent type, for example "security".')
-    turns: int = Field(default=0, ge=0, description="Assistant messages.")
+    turns: int = Field(default=0, ge=0, description="API turns the agent took.")
     tool_calls: int = Field(default=0, ge=0)
     tool_failures: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
