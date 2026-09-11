@@ -153,6 +153,7 @@ jobs:
 
 Argus is checked out from this repository at the commit the caller pinned, never from the repository under review, so the trust model is unchanged: the pull request is read, not executed.
 `v1` is a tag this repository moves forward with compatible releases; to take updates deliberately, pin the full commit SHA instead, the way this workflow pins its own actions.
+Call it from `pull_request` events as above; from any other event, such as your own `workflow_dispatch`, pass the pull request number as the `pr` input.
 Argus reads diffs and files, so the language of the reviewed repository does not matter.
 
 ## Development

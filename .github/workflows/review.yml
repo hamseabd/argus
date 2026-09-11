@@ -9,7 +9,8 @@ name: argus-review
 # pinned tag and pass CLAUDE_CODE_OAUTH_TOKEN (see the README). Argus is then
 # checked out from its own repository at that same pinned commit.
 #
-# Trust model: Argus itself is installed and run from the default branch.
+# Trust model: Argus itself is installed and run from a trusted ref, this
+# repository's default branch or the commit a calling repository pinned.
 # The pull request head is checked out into a separate directory that is
 # only read, never installed or executed, so a PR cannot run its own code
 # next to the subscription token. Pull requests from forks are skipped on
@@ -26,6 +27,11 @@ on:
         required: true
         type: number
   workflow_call:
+    inputs:
+      pr:
+        description: Pull request number to review when the calling event is not a pull_request
+        required: false
+        type: number
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: Claude subscription token from `claude setup-token`

@@ -51,7 +51,8 @@ def test_review_can_be_called_from_another_repository() -> None:
     call = load("review.yml")["on"]["workflow_call"]
 
     assert call["secrets"]["CLAUDE_CODE_OAUTH_TOKEN"]["required"] is True
-    assert "inputs" not in call  # the caller pins a commit; nothing else to configure
+    assert list(call["inputs"]) == ["pr"]  # only for callers not running on a pull_request event
+    assert call["inputs"]["pr"]["required"] is False
 
 
 def test_argus_runs_from_a_trusted_ref_and_only_reads_the_pr_head() -> None:
