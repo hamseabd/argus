@@ -1,0 +1,39 @@
+"""Runtime settings, overridable through ARGUS_* environment variables.
+
+Defaults are the values the design spec fixes for v1. Everything that
+shapes a query (model, effort, caps) lives here so the agent layer builds
+options from one object and tests can pin any value without touching the
+environment.
+"""
+
+from typing import Literal
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from argus.context.diff import DIFF_SIZE_CAP
+
+Effort = Literal["low", "medium", "high", "max"]
+LogFormat = Literal["auto", "json", "console"]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="ARGUS_", extra="ignore")
+
+    lead_model: str = "claude-opus-5"
+    lead_effort: Effort = "high"
+    lead_max_turns: int = Field(default=40, ge=1)
+    lead_max_budget_usd: float = Field(default=3.0, gt=0)
+
+    specialist_model: str = "claude-sonnet-5"
+    specialist_effort: Effort = "medium"
+    specialist_max_turns: int = Field(default=15, ge=1)
+
+    verifier_model: str = "claude-sonnet-5"
+    verifier_effort: Effort = "medium"
+    verifier_max_turns: int = Field(default=10, ge=1)
+    verifier_max_budget_usd: float = Field(default=0.5, gt=0)
+    verify_concurrency: int = Field(default=4, ge=1)
+
+    diff_size_cap: int = Field(default=DIFF_SIZE_CAP, ge=1)
+    log_format: LogFormat = "auto"
