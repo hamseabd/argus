@@ -1,0 +1,16 @@
+diff --git a/pkg/big.py b/pkg/spaced name.py
+similarity index 95%
+rename from pkg/big.py
+rename to pkg/spaced name.py
+index b458cd9..6c01f5f 100644
+--- a/pkg/big.py
++++ b/pkg/spaced name.py	
+@@ -4,7 +4,7 @@ value 3
+ value 4
+ value 5
+ value 6
+-value 7
++value seven
+ value 8
+ value 9
+ value 10

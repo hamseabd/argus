@@ -1,0 +1,19 @@
+diff --git a/pkg/gone.py b/pkg/gone.py
+deleted file mode 100644
+index 33194a0..0000000
+--- a/pkg/gone.py
++++ /dev/null
+@@ -1 +0,0 @@
+-old content
+diff --git a/pkg/new.py b/pkg/new.py
+new file mode 100644
+index 0000000..39963cd
+--- /dev/null
++++ b/pkg/new.py
+@@ -0,0 +1,2 @@
++brand new
++file
+diff --git a/pkg/old_name.py b/pkg/new_name.py
+similarity index 100%
+rename from pkg/old_name.py
+rename to pkg/new_name.py

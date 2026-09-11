@@ -1,0 +1,23 @@
+diff --git a/pkg/module.py b/pkg/module.py
+index f696b4b..c324c3d 100644
+--- a/pkg/module.py
++++ b/pkg/module.py
+@@ -1,8 +1,9 @@
+ line1
+ line2
+-line3
++line3 changed
+ line4
+ line5
++inserted after line5
+ line6
+ line7
+ line8
+@@ -15,6 +16,6 @@ line14
+ line15
+ line16
+ line17
+-line18
++line18 changed
+ line19
+ line20
