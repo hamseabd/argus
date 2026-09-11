@@ -69,12 +69,14 @@ def verifier_user_prompt(finding: Finding, diff_section: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def finding_diff_section(context: ReviewContext, finding: Finding) -> str:
+def diff_sections(context: ReviewContext) -> dict[str, str]:
+    """Each file's section of the diff by path; parse once, then look findings up."""
+    return {file.path: file.text for file in parse_diff(context.diff_text)}
+
+
+def finding_diff_section(sections: dict[str, str], finding: Finding) -> str:
     """The diff section for the finding's file, or empty if it is not in the diff."""
-    for file in parse_diff(context.diff_text):
-        if file.path == finding.file:
-            return file.text
-    return ""
+    return sections.get(finding.file, "")
 
 
 def _describe(file: ChangedFile) -> str:

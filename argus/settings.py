@@ -13,8 +13,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from argus.context.diff import DIFF_SIZE_CAP
 
-Effort = Literal["low", "medium", "high", "max"]
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
 LogFormat = Literal["auto", "json", "console"]
+LogLevel = Literal["debug", "info", "warning"]
 
 
 class Settings(BaseSettings):
@@ -37,3 +38,4 @@ class Settings(BaseSettings):
 
     diff_size_cap: int = Field(default=DIFF_SIZE_CAP, ge=1)
     log_format: LogFormat = "auto"
+    log_level: LogLevel = "info"

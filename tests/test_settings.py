@@ -22,6 +22,12 @@ def test_defaults_match_the_spec() -> None:
     assert s.verify_concurrency == 4
     assert s.diff_size_cap == DIFF_SIZE_CAP
     assert s.log_format == "auto"
+    assert s.log_level == "info"
+
+
+def test_every_sdk_effort_level_is_accepted() -> None:
+    for effort in ("low", "medium", "high", "xhigh", "max"):
+        assert Settings(_env_file=None, lead_effort=effort).lead_effort == effort
 
 
 def test_argus_prefixed_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:

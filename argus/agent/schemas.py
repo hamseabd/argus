@@ -12,26 +12,25 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from argus.domain.models import Review, Verdict
+from argus.domain.models import Finding, Review, Verdict
 
-_PIPELINE_OWNED: dict[type[BaseModel], set[str]] = {
-    Review: set(),
-    Verdict: {"finding_id"},
+PIPELINE_OWNED: dict[type[BaseModel], frozenset[str]] = {
+    Finding: frozenset({"id", "status"}),
+    Verdict: frozenset({"finding_id"}),
 }
-_FINDING_PIPELINE_OWNED = {"id", "status"}
+"""Fields the pipeline fills in; the model never sees them in its output schema."""
 _DROPPED_KEYWORDS = {"default", "title"}
 
 
 def review_schema() -> dict[str, Any]:
     schema = _strict(Review.model_json_schema())
-    finding = schema["properties"]["findings"]["items"]
-    _remove_properties(finding, _FINDING_PIPELINE_OWNED)
+    _remove_properties(schema["properties"]["findings"]["items"], PIPELINE_OWNED[Finding])
     return schema
 
 
 def verdict_schema() -> dict[str, Any]:
     schema = _strict(Verdict.model_json_schema())
-    _remove_properties(schema, _PIPELINE_OWNED[Verdict])
+    _remove_properties(schema, PIPELINE_OWNED[Verdict])
     return schema
 
 
@@ -68,7 +67,7 @@ def _rewrite(node: Any, definitions: dict[str, Any]) -> Any:
     return out
 
 
-def _remove_properties(obj: dict[str, Any], names: set[str]) -> None:
+def _remove_properties(obj: dict[str, Any], names: frozenset[str]) -> None:
     for name in names:
         obj["properties"].pop(name, None)
     obj["required"] = [n for n in obj["required"] if n not in names]

@@ -15,6 +15,8 @@ import structlog
 
 LogFormat = Literal["auto", "json", "console"]
 ResolvedFormat = Literal["json", "console"]
+LogLevel = Literal["debug", "info", "warning"]
+_LEVELS = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING}
 
 
 def new_run_id() -> str:
@@ -27,7 +29,9 @@ def resolve_format(log_format: LogFormat, stream: IO[str]) -> ResolvedFormat:
     return log_format
 
 
-def configure(log_format: LogFormat = "auto", stream: IO[str] | None = None) -> None:
+def configure(
+    log_format: LogFormat = "auto", stream: IO[str] | None = None, level: LogLevel = "info"
+) -> None:
     """Configure structlog for the process; safe to call more than once."""
     out = sys.stderr if stream is None else stream
     renderer: structlog.typing.Processor
@@ -45,7 +49,7 @@ def configure(log_format: LogFormat = "auto", stream: IO[str] | None = None) -> 
             structlog.processors.format_exc_info,
             renderer,
         ],
-        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+        wrapper_class=structlog.make_filtering_bound_logger(_LEVELS[level]),
         logger_factory=structlog.PrintLoggerFactory(file=out),
         cache_logger_on_first_use=False,
     )

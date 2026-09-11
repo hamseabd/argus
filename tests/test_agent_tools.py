@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from argus.agent.tools import GIT_HISTORY_TOOL_NAME, build_argus_server, git_history
+from argus.agent.tools import GIT_HISTORY_TOOL_NAME, UNCOMMITTED, build_argus_server, git_history
 
 CALC_V1 = "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
 CALC_V2 = CALC_V1.replace("a - b", "b - a")
@@ -107,3 +107,45 @@ def test_tool_handler_reports_errors_instead_of_raising(repo: Path) -> None:
 
     assert result["is_error"] is True
     assert "outside" in result["content"][0]["text"]
+
+
+def test_uncommitted_lines_are_labelled_not_misattributed(repo: Path) -> None:
+    calc = repo / "src" / "calc.py"
+    calc.write_text("import os\nimport sys\nimport re\n" + calc.read_text())  # 3 new lines on top
+
+    assert git_history(repo, "src/calc.py", 1, 2) == [dict(UNCOMMITTED)]
+
+
+def test_committed_lines_below_an_uncommitted_edit_are_mapped_to_head(repo: Path) -> None:
+    calc = repo / "src" / "calc.py"
+    calc.write_text("import os\nimport sys\nimport re\n" + calc.read_text())
+
+    commits = git_history(repo, "src/calc.py", 8, 9)  # sub's body, lines 5-6 in HEAD
+
+    assert [c["subject"] for c in commits] == ["fix: swap operands in sub", "feat: add calculator"]
+
+
+def test_a_range_spanning_uncommitted_and_committed_lines_reports_both(repo: Path) -> None:
+    calc = repo / "src" / "calc.py"
+    calc.write_text("import os\nimport sys\nimport re\n" + calc.read_text())
+
+    entries = git_history(repo, "src/calc.py", 3, 4)  # line 3 new, line 4 is HEAD line 1
+
+    assert entries[0] == dict(UNCOMMITTED)
+    assert [e["subject"] for e in entries[1:]] == ["feat: add calculator"]
+
+
+def test_a_staged_new_file_has_no_history_yet(repo: Path) -> None:
+    (repo / "fresh.py").write_text("a\nb\n")
+    git(repo, "add", "fresh.py")
+
+    assert git_history(repo, "fresh.py", 1, 2) == [dict(UNCOMMITTED)]
+
+
+def test_uncommitted_deletion_above_the_range_shifts_the_mapping(repo: Path) -> None:
+    calc = repo / "src" / "calc.py"
+    calc.write_text("".join(calc.read_text().splitlines(keepends=True)[3:]))  # drop add()
+
+    commits = git_history(repo, "src/calc.py", 2, 3)  # sub's body, lines 5-6 in HEAD
+
+    assert [c["subject"] for c in commits] == ["fix: swap operands in sub", "feat: add calculator"]

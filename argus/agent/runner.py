@@ -62,7 +62,15 @@ class SdkRunner:
                     result = message
                     bind_run(session_id=message.session_id)
                 elif isinstance(message, RateLimitEvent):
-                    log.warning("rate_limited", stage=stage, **dict(message.rate_limit_info))
+                    info = message.rate_limit_info
+                    log.warning(
+                        "rate_limited",
+                        stage=stage,
+                        status=info.status,
+                        rate_limit_type=info.rate_limit_type,
+                        utilization=info.utilization,
+                        resets_at=info.resets_at,
+                    )
         except ClaudeSDKError as exc:
             raise AgentRunError(
                 subtype=f"sdk_error:{type(exc).__name__}",

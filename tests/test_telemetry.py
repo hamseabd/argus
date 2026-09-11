@@ -80,5 +80,16 @@ def test_configure_resets_bound_context() -> None:
     assert "stale" not in stream.getvalue()
 
 
+def test_debug_events_are_dropped_at_info_and_kept_at_debug() -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    telemetry.get_logger().debug("cli_stderr", line="x")
+    assert stream.getvalue() == ""
+
+    telemetry.configure(log_format="json", stream=stream, level="debug")
+    telemetry.get_logger().debug("cli_stderr", line="x")
+    assert json.loads(stream.getvalue())["event"] == "cli_stderr"
+
+
 def test_module_uses_structlog_not_print() -> None:
     assert isinstance(telemetry.get_logger(), structlog.typing.FilteringBoundLogger | object)

@@ -8,6 +8,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ProcessError,
     RateLimitEvent,
+    RateLimitInfo,
     ResultMessage,
     TextBlock,
 )
@@ -129,15 +130,19 @@ def test_rate_limits_and_stages_are_logged() -> None:
     stream = io.StringIO()
     telemetry.configure(log_format="json", stream=stream)
     event = RateLimitEvent(
-        rate_limit_info={"status": "allowed_warning", "rateLimitType": "five_hour"},
+        rate_limit_info=RateLimitInfo(
+            status="allowed_warning", rate_limit_type="five_hour", utilization=0.9
+        ),
         uuid="u",
         session_id="sess-1",
     )
 
     asyncio_run(run(runner_for([event, result()])))
 
-    events = [json.loads(line)["event"] for line in stream.getvalue().splitlines()]
-    assert events == ["stage_start", "rate_limited", "stage_end"]
+    records = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert [r["event"] for r in records] == ["stage_start", "rate_limited", "stage_end"]
+    assert records[1]["status"] == "allowed_warning"
+    assert records[1]["utilization"] == 0.9
     last = json.loads(stream.getvalue().splitlines()[-1])
     assert last["cost_usd"] == 0.42
     assert last["stage"] == "verify:x"
