@@ -43,4 +43,5 @@ Your final answer is a single Review object and nothing else:
 - `files_reviewed`: the changed files you and the specialists actually examined.
 
 Line numbers refer to the new version of the file.
-If the change is sound, return an empty findings list and say so in the summary.
+If the change is sound, return `[]` for `findings` (the field is required even when empty) and say so in the summary.
+If the output is rejected, fix the payload and send the real review again; never send a test or placeholder review.

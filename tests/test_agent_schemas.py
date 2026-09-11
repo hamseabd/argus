@@ -1,6 +1,7 @@
 import json
 
 import jsonschema
+import pytest
 from jsonschema import Draft7Validator
 
 from argus.agent.schemas import output_format, review_schema, verdict_schema
@@ -122,9 +123,29 @@ def test_constraints_survive_in_the_schema() -> None:
     assert sorted(finding["severity"]["enum"]) == ["critical", "high", "low", "medium"]
 
 
+def test_prose_fields_have_a_length_floor_in_the_schema_only() -> None:
+    # A placeholder that fits the shape ("Test call to diagnose schema validation.")
+    # must fail the SDK's validation so the model rewrites it; the domain model
+    # itself stays permissive so the pipeline can build a Review from any source.
+    assert review_schema()["properties"]["summary"]["minLength"] == 80
+    assert verdict_schema()["properties"]["reasoning"]["minLength"] == 80
+    assert "minLength" not in Review.model_json_schema()["properties"]["summary"]
+
+    placeholder = {
+        "summary": "Test call to diagnose schema validation.",
+        "files_reviewed": ["README.md"],
+        "findings": [],
+    }
+    with pytest.raises(jsonschema.ValidationError, match="too short"):
+        jsonschema.validate(placeholder, review_schema())
+
+
 def test_a_review_round_trips_through_the_schema() -> None:
     review = Review(
-        summary="One bug.",
+        summary=(
+            "Adds paging to the user list. The slice bound is off by one, so the last "
+            "user of every page is dropped; nothing else in the change is affected."
+        ),
         files_reviewed=["a.py"],
         findings=[
             Finding(
@@ -150,7 +171,14 @@ def test_a_review_round_trips_through_the_schema() -> None:
 
 
 def test_a_verdict_round_trips_through_the_schema() -> None:
-    model_output = {"verdict": "rejected", "reasoning": "r", "confidence": 0.4}
+    model_output = {
+        "verdict": "rejected",
+        "reasoning": (
+            "paging.py:7 clamps `size` to the list length before slicing, so the "
+            "reported overflow cannot happen. The finding describes the old code path."
+        ),
+        "confidence": 0.4,
+    }
 
     jsonschema.validate(model_output, verdict_schema())
     assert Verdict(finding_id="x", **model_output).verdict == "rejected"

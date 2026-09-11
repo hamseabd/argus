@@ -103,6 +103,7 @@ class SdkRunner:
             num_turns=result.num_turns,
             duration_ms=result.duration_ms,
             subagents_run=state.subagents_started,
+            output_rejections=state.output_rejections,
         )
         log.info("stage_end", **metrics.model_dump())
         return RunResult(

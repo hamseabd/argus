@@ -3,8 +3,10 @@
 allowed_tools already limits what the model can call. The PreToolUse hook
 is defense in depth: if a mutating tool is ever requested it is denied with
 a reason the model can read, so it does not retry. The other hooks only
-observe, logging every tool call and counting subagent starts so the
-pipeline can tell whether the lead delegated as instructed.
+observe: they log every tool call, count subagent starts so the pipeline
+can tell whether the lead delegated as instructed, and count rejected
+structured outputs so a review that only validated after several attempts
+is visible in the metrics.
 """
 
 import json
@@ -23,6 +25,8 @@ DENIED_TOOLS = frozenset(
 )
 DENIED_TOOL_MATCHER = "|".join(sorted(DENIED_TOOLS))
 ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Agent", GIT_HISTORY_TOOL_NAME)
+STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
+"""The SDK's internal tool that validates the final answer against the output schema."""
 
 _INPUT_SUMMARY_CHARS = 200
 
@@ -36,6 +40,7 @@ class HookState:
     denied: int = 0
     tool_calls: int = 0
     tool_failures: int = 0
+    output_rejections: int = 0
     subagents_started: int = 0
     subagents_stopped: int = 0
 
@@ -76,6 +81,8 @@ def audit_tool_call(state: HookState) -> Hook:
 def audit_tool_failure(state: HookState) -> Hook:
     async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
         state.tool_failures += 1
+        if data.get("tool_name") == STRUCTURED_OUTPUT_TOOL:
+            state.output_rejections += 1
         get_logger().warning(
             "tool_failed", tool=data.get("tool_name"), error=_truncate(str(data.get("error", "")))
         )

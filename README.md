@@ -16,7 +16,7 @@ Six inline findings, all confirmed by the verifier, including two real trust-mod
 - **Verifies before it reports.** Every finding gets its own fresh query whose only job is to refute it by reading the code. Rejected findings are dropped; failed verifications are reported as `unverified`, never as confirmed.
 - **Posts inline.** A finding lands as a review comment on its line when that line is in the diff, otherwise in the review body. The review never requests changes; merge gating is the CLI exit code.
 - **Never touches the repository.** Reviewers get `Read`, `Grep`, `Glob`, `Agent`, and one custom read-only tool. Mutating tools are removed from the tool set and denied again by a `PreToolUse` hook.
-- **Explains itself.** Structured JSON logs carry cost, tokens, turns, duration, and subagent count per stage, plus a tool-call audit trail, under one `run_id`.
+- **Explains itself.** Structured JSON logs carry cost, tokens, turns, duration, subagent count, and rejected structured outputs per stage, plus a tool-call audit trail, under one `run_id`.
 
 ## Architecture
 
@@ -70,7 +70,7 @@ That boundary is enforced by a test: a source scan proves only `argus/agent/` me
 ### How a review runs
 
 1. **Context.** PR mode fetches the diff, changed files, and metadata from the GitHub REST API. Local mode diffs from the merge base with the base branch to the working tree. Files are dropped from the diff, largest first, until it fits the cap; the lead is told which ones to read directly.
-2. **Review.** The lead gets the change and must delegate to all three specialists in one turn. Each specialist returns a JSON array of findings. The lead merges them and answers with a `Review` as structured output, validated by the SDK against a schema derived from the domain model and re-validated by Pydantic.
+2. **Review.** The lead gets the change and must delegate to all three specialists in one turn. Each specialist returns a JSON array of findings. The lead merges them and answers with a `Review` as structured output, validated by the SDK against a schema derived from the domain model and re-validated by Pydantic. The schema puts a length floor on the summary (and on the verifier's reasoning), so a placeholder that merely fits the shape is rejected and the model has to write the real thing; how many outputs were rejected before one validated is part of every stage's metrics.
 3. **Verify.** Each finding runs in its own query with only the finding and its diff hunk. The verifier confirms only if the code path actually exhibits the issue. At most four run at once.
 4. **Rank.** Rejected findings are dropped. The rest are ordered confirmed before unverified, then by severity, then by path.
 5. **Report.** Markdown in the terminal, a JSON artifact with `--json`, and with `--post` a GitHub review with inline comments.

@@ -133,7 +133,7 @@ def test_verdict_confidence_is_a_probability() -> None:
         Verdict(finding_id="x", verdict="maybe", reasoning="r", confidence=0.5)
 
 
-def test_stage_metrics_defaults_subagents_to_zero() -> None:
+def test_stage_metrics_default_the_counters_to_zero() -> None:
     metrics = StageMetrics(
         stage="verify:correctness-1",
         model="claude-sonnet-5",
@@ -145,6 +145,7 @@ def test_stage_metrics_defaults_subagents_to_zero() -> None:
     )
 
     assert metrics.subagents_run == 0
+    assert metrics.output_rejections == 0
 
 
 def test_review_result_round_trips_through_json() -> None:

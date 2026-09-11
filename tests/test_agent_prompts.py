@@ -59,6 +59,13 @@ def test_lead_prompt_leaves_verification_to_the_verify_stage() -> None:
     assert "You may verify" not in text
 
 
+def test_lead_prompt_forbids_placeholder_output() -> None:
+    text = load_prompt("lead")
+
+    assert "`[]`" in text
+    assert "placeholder" in text
+
+
 def test_specialist_prompts_stay_inside_the_change() -> None:
     for name in ("correctness", "security", "quality"):
         assert "outside the diff" in load_prompt(name), name
