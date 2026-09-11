@@ -131,6 +131,29 @@ Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` en
 It needs one repository secret, `CLAUDE_CODE_OAUTH_TOKEN`, and the workflow's own `GITHUB_TOKEN` with `pull-requests: write`.
 It does not run on every push, so a busy branch neither burns quota nor stacks duplicate reviews.
 
+#### Reviewing another repository
+
+The same file is a reusable workflow, so any repository can have Argus review its pull requests with a small caller workflow and the one secret:
+
+```yaml
+# .github/workflows/argus-review.yml
+name: argus-review
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  review:
+    uses: hamseabd/argus/.github/workflows/review.yml@v1
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+Argus is checked out from this repository at the commit the caller pinned (`v1` above), never from the repository under review, so the trust model is unchanged: the pull request is read, not executed.
+Argus reads diffs and files, so the language of the reviewed repository does not matter.
+
 ## Development
 
 ```bash

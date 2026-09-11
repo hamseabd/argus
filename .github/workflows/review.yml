@@ -5,6 +5,10 @@ name: argus-review
 # run on every push (synchronize) so a busy branch neither burns quota nor
 # stacks duplicate reviews.
 #
+# Any repository can reuse it: call this file as a reusable workflow at a
+# pinned tag and pass CLAUDE_CODE_OAUTH_TOKEN (see the README). Argus is then
+# checked out from its own repository at that same pinned commit.
+#
 # Trust model: Argus itself is installed and run from the default branch.
 # The pull request head is checked out into a separate directory that is
 # only read, never installed or executed, so a PR cannot run its own code
@@ -21,6 +25,17 @@ on:
         description: Pull request number to review
         required: true
         type: number
+  workflow_call:
+    inputs:
+      argus-repository:
+        description: Repository that holds Argus, checked out at this workflow's own commit
+        required: false
+        type: string
+        default: hamseabd/argus
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: Claude subscription token from `claude setup-token`
+        required: true
 
 permissions:
   contents: read
@@ -44,10 +59,13 @@ jobs:
     # the runner (and the quota window) for the six-hour default.
     timeout-minutes: 30
     steps:
-      - name: Check out Argus from the default branch (trusted)
+      - name: Check out Argus (trusted)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          # Here: the default branch, never the pull request's code. Called from
+          # another repository: this workflow's own commit, which the caller pinned.
+          repository: ${{ inputs.argus-repository || github.repository }}
+          ref: ${{ inputs.argus-repository && job.workflow_sha || github.event.repository.default_branch }}
       - name: Check out the pull request head (reviewed, never executed)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
