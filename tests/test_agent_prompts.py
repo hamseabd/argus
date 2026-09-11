@@ -1,13 +1,6 @@
 from pathlib import Path
 
-from argus.agent.prompts import (
-    PROMPT_NAMES,
-    diff_sections,
-    finding_diff_section,
-    lead_user_prompt,
-    load_prompt,
-    verifier_user_prompt,
-)
+from argus.agent.prompts import PROMPT_NAMES, lead_user_prompt, load_prompt, verifier_user_prompt
 from argus.domain.models import ChangedFile, Finding, PRInfo, ReviewContext
 
 FIXTURES = Path(__file__).parent / "fixtures" / "diffs"
@@ -104,29 +97,6 @@ def test_lead_user_prompt_includes_pr_title_and_body() -> None:
     assert "Caches lookups." in text
     assert "generated.json" not in text
     assert "omitted" not in text.lower()
-
-
-def test_finding_diff_section_returns_the_file_section() -> None:
-    section = finding_diff_section(diff_sections(context()), finding())
-
-    assert section.startswith("diff --git a/pkg/module.py")
-    assert "line18 changed" in section
-    assert "pkg/new.py" not in section
-
-
-def test_finding_diff_section_is_empty_for_a_file_not_in_the_diff() -> None:
-    other = finding().model_copy(update={"file": "elsewhere.py"})
-
-    assert finding_diff_section(diff_sections(context()), other) == ""
-
-
-def test_diff_sections_are_keyed_by_path_and_verbatim() -> None:
-    ctx = context()
-
-    sections = diff_sections(ctx)
-
-    assert set(sections) >= {"pkg/module.py", "pkg/new.py", "img.bin"}
-    assert "".join(sections.values()) == ctx.diff_text
 
 
 def test_verifier_user_prompt_carries_the_finding_and_its_hunk() -> None:

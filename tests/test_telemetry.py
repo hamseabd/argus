@@ -93,3 +93,13 @@ def test_debug_events_are_dropped_at_info_and_kept_at_debug() -> None:
 
 def test_module_uses_structlog_not_print() -> None:
     assert isinstance(telemetry.get_logger(), structlog.typing.FilteringBoundLogger | object)
+
+
+def test_default_stream_follows_the_current_stderr(monkeypatch) -> None:
+    telemetry.configure(log_format="json")
+    later = io.StringIO()
+    monkeypatch.setattr("sys.stderr", later)
+
+    telemetry.get_logger().info("late")
+
+    assert json.loads(later.getvalue())["event"] == "late"
