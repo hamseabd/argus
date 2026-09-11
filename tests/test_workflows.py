@@ -50,7 +50,8 @@ def test_review_skips_drafts_and_fork_pull_requests() -> None:
 def test_review_can_be_called_from_another_repository() -> None:
     call = load("review.yml")["on"]["workflow_call"]
 
-    assert call["secrets"]["CLAUDE_CODE_OAUTH_TOKEN"]["required"] is True
+    required = {name for name, spec in call["secrets"].items() if spec["required"]}
+    assert required == {"CLAUDE_CODE_OAUTH_TOKEN", "ARGUS_APP_ID", "ARGUS_APP_PRIVATE_KEY"}
     assert list(call["inputs"]) == ["pr"]  # only for callers not running on a pull_request event
     assert call["inputs"]["pr"]["required"] is False
 

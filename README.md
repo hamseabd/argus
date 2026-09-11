@@ -138,8 +138,8 @@ The app needs `Pull requests: Read and write` and `Contents: Read-only`, and mus
 
 #### Reviewing another repository
 
-The same file is a reusable workflow, so any repository can have Argus review its pull requests with a small caller workflow and the one secret.
-This is the caller [apex-agent](https://github.com/hamseabd/apex-agent/pull/5) runs, after Argus reviewed the first draft of it and asked for the commit pin, the explicit draft and fork guard, and the concurrency group:
+The same file is a reusable workflow, so any repository can have Argus review its pull requests with a small caller workflow, the same three secrets, and the Argus app installed on it.
+The caller below is the one [apex-agent](https://github.com/hamseabd/apex-agent/pull/5) runs; Argus reviewed its first draft there and asked for the commit pin, the explicit draft and fork guard, and the concurrency group:
 
 ```yaml
 # .github/workflows/argus-review.yml
@@ -149,7 +149,6 @@ on:
     types: [opened, ready_for_review]
 permissions:
   contents: read
-  pull-requests: write
 concurrency:
   group: argus-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -161,6 +160,8 @@ jobs:
     uses: hamseabd/argus/.github/workflows/review.yml@e8847dfe8ff24dae9c46a4bcfe925bdda80e0054 # v1
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ARGUS_APP_ID: ${{ secrets.ARGUS_APP_ID }}
+      ARGUS_APP_PRIVATE_KEY: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
 ```
 
 Argus is checked out from this repository at the commit the caller pinned, never from the repository under review, so the trust model is unchanged: the pull request is read, not executed.

@@ -6,7 +6,7 @@ name: argus-review
 # stacks duplicate reviews.
 #
 # Any repository can reuse it: call this file as a reusable workflow at a
-# pinned tag and pass CLAUDE_CODE_OAUTH_TOKEN (see the README). Argus is then
+# pinned tag and pass the same three secrets (see the README). Argus is then
 # checked out from its own repository at that same pinned commit.
 #
 # Trust model: Argus itself is installed and run from a trusted ref, this
@@ -40,6 +40,12 @@ on:
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: Claude subscription token from `claude setup-token`
+        required: true
+      ARGUS_APP_ID:
+        description: App ID of the Argus GitHub App, which must be installed on the calling repository
+        required: true
+      ARGUS_APP_PRIVATE_KEY:
+        description: Private key of the Argus GitHub App
         required: true
 
 permissions:
