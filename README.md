@@ -93,6 +93,7 @@ The SDK still reports what the same run would have cost on the API, and the JSON
 | [PR #7](https://github.com/hamseabd/argus/pull/7#pullrequestreview-5174291207): 2 files, 6 findings, 6 verifications | $2.34 | 306 s | 48 |
 | [PR #8](https://github.com/hamseabd/argus/pull/8#pullrequestreview-5178840171): 3 files, 0 findings | $1.37 | 128 s | 22 |
 | PR #8 with the current prompts: 1 finding, 1 verification | $1.02 | 190 s | 5 |
+| [PR #15](https://github.com/hamseabd/argus/pull/15#pullrequestreview-5184949615): 4 files, 0 findings, lead 2 turns | $0.50 | 91 s | 5 |
 
 Most of the input is cache reads: 805,554 of 805,620 input tokens on PR #7.
 The first two runs let the lead re-check findings itself, and it did: 22 to 26 Opus turns re-reading code, $0.88 of the $1.37 on PR #8.
