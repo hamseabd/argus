@@ -136,7 +136,8 @@ It does not run on every push, so a busy branch neither burns quota nor stacks d
 
 #### Reviewing another repository
 
-The same file is a reusable workflow, so any repository can have Argus review its pull requests with a small caller workflow and the one secret:
+The same file is a reusable workflow, so any repository can have Argus review its pull requests with a small caller workflow and the one secret.
+This is the caller [apex-agent](https://github.com/hamseabd/apex-agent/pull/5) runs, after Argus reviewed the first draft of it and asked for the commit pin, the explicit draft and fork guard, and the concurrency group:
 
 ```yaml
 # .github/workflows/argus-review.yml
@@ -147,16 +148,23 @@ on:
 permissions:
   contents: read
   pull-requests: write
+concurrency:
+  group: argus-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 jobs:
   review:
-    uses: hamseabd/argus/.github/workflows/review.yml@v1
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    uses: hamseabd/argus/.github/workflows/review.yml@e8847dfe8ff24dae9c46a4bcfe925bdda80e0054 # v1
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
 Argus is checked out from this repository at the commit the caller pinned, never from the repository under review, so the trust model is unchanged: the pull request is read, not executed.
-`v1` is a tag this repository moves forward with compatible releases; to take updates deliberately, pin the full commit SHA instead, the way this workflow pins its own actions.
-Call it from `pull_request` events as above; from any other event, such as your own `workflow_dispatch`, pass the pull request number as the `pr` input.
+Pin the commit, as above, because the workflow receives a secret and write access; `v1` is a tag this repository moves forward with compatible releases, and the comment records which release the commit is.
+That caller is for `pull_request` events; its guard and concurrency group assume one.
+To review a pull request from another event, such as your own `workflow_dispatch`, call the workflow with `with: pr: ${{ inputs.pr }}`, key the concurrency group on that number, and drop the guard.
 Argus reads diffs and files, so the language of the reviewed repository does not matter.
 
 ## Development
