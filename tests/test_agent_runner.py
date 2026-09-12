@@ -11,12 +11,14 @@ from claude_agent_sdk import (
     RateLimitInfo,
     ResultMessage,
     TextBlock,
+    ToolUseBlock,
 )
 
 from argus import telemetry
-from argus.agent.hooks import HookState
+from argus.agent.hooks import LEAD_AGENT, AgentCounters, HookState
 from argus.agent.runner import RunResult, SdkRunner
 from argus.domain.errors import AgentRunError, ReviewProtocolError
+from argus.domain.models import AgentMetrics
 
 
 def result(**overrides: Any) -> ResultMessage:
@@ -78,6 +80,58 @@ def test_success_returns_structured_output_and_metrics() -> None:
     assert m.duration_ms == 1200
     assert m.subagents_run == 3
     assert m.output_rejections == 2
+
+
+def test_metrics_attribute_turns_and_tokens_to_the_lead_and_each_specialist() -> None:
+    delegate = AssistantMessage(
+        content=[
+            ToolUseBlock(id="tu-sec", name="Agent", input={"subagent_type": "security"}),
+            ToolUseBlock(id="tu-cor", name="Agent", input={"subagent_type": "correctness"}),
+        ],
+        model="claude-opus-5",
+        usage={"output_tokens": 50, "cache_read_input_tokens": 1000},
+    )
+    security_turn = AssistantMessage(
+        content=[TextBlock("reading")],
+        model="claude-sonnet-5",
+        parent_tool_use_id="tu-sec",
+        usage={
+            "output_tokens": 20,
+            "cache_read_input_tokens": 300,
+            "cache_creation_input_tokens": 5,
+        },
+    )
+    final = AssistantMessage(
+        content=[TextBlock("done")], model="claude-opus-5", usage={"output_tokens": 30}
+    )
+    state = HookState(
+        agents={
+            LEAD_AGENT: AgentCounters(tool_calls=1),
+            "a-sec": AgentCounters(tool_calls=7, tool_failures=1, duration_ms=4200),
+        },
+        agent_types={"a-sec": "security"},
+    )
+
+    out = asyncio_run(
+        run(runner_for([delegate, security_turn, security_turn, final, result()]), state)
+    )
+
+    assert out.metrics.agents == [
+        AgentMetrics(
+            agent="lead", turns=2, tool_calls=1, output_tokens=80, cache_read_input_tokens=1000
+        ),
+        AgentMetrics(
+            agent="security",
+            turns=2,
+            tool_calls=7,
+            tool_failures=1,
+            output_tokens=40,
+            cache_read_input_tokens=600,
+            cache_creation_input_tokens=10,
+            duration_ms=4200,
+        ),
+        AgentMetrics(agent="correctness"),  # delegated to, never spoke: still listed
+    ]
 
 
 def test_error_subtype_raises_agent_run_error_with_cost_and_session() -> None:

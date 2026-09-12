@@ -108,6 +108,22 @@ class Verdict(_Model):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class AgentMetrics(_Model):
+    """One agent's share of a query: the lead thread or one subagent type."""
+
+    agent: str = Field(description='"lead" or the subagent type, for example "security".')
+    runs: int = Field(
+        default=1, ge=1, description="Times this agent was started; the counts sum across runs."
+    )
+    turns: int = Field(default=0, ge=0, description="API turns the agent took.")
+    tool_calls: int = Field(default=0, ge=0)
+    tool_failures: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cache_read_input_tokens: int = Field(default=0, ge=0)
+    cache_creation_input_tokens: int = Field(default=0, ge=0)
+    duration_ms: int = Field(default=0, ge=0, description="Subagents only: start to stop.")
+
+
 class StageMetrics(_Model):
     """Cost and usage for one query."""
 
@@ -123,6 +139,9 @@ class StageMetrics(_Model):
     subagents_run: int = Field(default=0, ge=0, description="Review stage only.")
     output_rejections: int = Field(
         default=0, ge=0, description="Structured outputs the SDK rejected before one validated."
+    )
+    agents: list[AgentMetrics] = Field(
+        default_factory=list, description="Per-agent attribution; the lead comes first."
     )
 
 

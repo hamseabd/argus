@@ -7,6 +7,7 @@ from argus.agent.hooks import (
     ALLOWED_TOOLS,
     DENIED_TOOL_MATCHER,
     DENIED_TOOLS,
+    LEAD_AGENT,
     HookState,
     build_hooks,
     deny_mutating_tools,
@@ -133,6 +134,40 @@ def test_rejected_structured_outputs_are_counted_separately() -> None:
 
     assert state.output_rejections == 2
     assert state.tool_failures == 2
+
+
+def test_tool_calls_are_attributed_to_the_subagent_that_made_them() -> None:
+    state = HookState()
+    hooks = build_hooks(state)
+    post = hooks["PostToolUse"][0].hooks[0]
+    failed = hooks["PostToolUseFailure"][0].hooks[0]
+    inside = {"agent_id": "a-sec", "agent_type": "security"}
+
+    asyncio.run(post(hook_input("Read", "PostToolUse", **inside), None, {"signal": None}))
+    asyncio.run(post(hook_input("Grep", "PostToolUse", **inside), None, {"signal": None}))
+    asyncio.run(failed(hook_input("Read", "PostToolUseFailure", **inside), None, {"signal": None}))
+    asyncio.run(post(hook_input("Glob", "PostToolUse"), None, {"signal": None}))  # main thread
+
+    assert state.agents["a-sec"].tool_calls == 2
+    assert state.agents["a-sec"].tool_failures == 1
+    assert state.agents[LEAD_AGENT].tool_calls == 1
+    assert state.agent_types == {"a-sec": "security"}
+    assert state.tool_calls == 3  # the totals still count everyone
+
+
+def test_subagent_duration_is_measured_from_start_to_stop() -> None:
+    ticks = iter([10.0, 12.5])
+    state = HookState(clock=lambda: next(ticks))
+    hooks = build_hooks(state)
+    start = hooks["SubagentStart"][0].hooks[0]
+    stop = hooks["SubagentStop"][0].hooks[0]
+    agent = {"agent_id": "a-q", "agent_type": "quality"}
+
+    asyncio.run(start({"hook_event_name": "SubagentStart", **agent}, None, {"signal": None}))
+    asyncio.run(stop({"hook_event_name": "SubagentStop", **agent}, None, {"signal": None}))
+
+    assert state.agents["a-q"].duration_ms == 2500
+    assert state.agent_types["a-q"] == "quality"
 
 
 def test_build_hooks_registers_the_expected_events_and_matchers() -> None:

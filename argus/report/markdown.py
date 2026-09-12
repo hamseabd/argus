@@ -1,6 +1,6 @@
 """Markdown rendering shared by the terminal report and the GitHub review."""
 
-from argus.domain.models import Finding, ReviewResult, rank_findings
+from argus.domain.models import AgentMetrics, Finding, ReviewResult, rank_findings
 
 
 def render_report(result: ReviewResult) -> str:
@@ -72,7 +72,30 @@ def render_footer(result: ReviewResult) -> str:
     if rejections:
         parts.append(f"{rejections} schema rejection{'s' if rejections != 1 else ''}")
     parts.append(f"session {result.session_id}")
-    return " · ".join(parts)
+    footer = " · ".join(parts)
+    review_stage = next((m for m in metrics if m.stage == "review"), None)
+    if review_stage and review_stage.agents:
+        footer += "\n\n" + render_agents(review_stage.agents)
+    return footer
+
+
+def render_agents(agents: list[AgentMetrics]) -> str:
+    """One line: what the lead and each specialist did during the review stage."""
+    return "Agents: " + " · ".join(_agent_summary(a) for a in agents)
+
+
+def _agent_summary(agent: AgentMetrics) -> str:
+    parts = [
+        f"{agent.agent} {agent.turns} {_plural(agent.turns, 'turn')}",
+        f"{agent.tool_calls} {_plural(agent.tool_calls, 'tool call')}",
+    ]
+    if agent.duration_ms:
+        parts.append(f"{agent.duration_ms / 1000:.1f} s")
+    return ", ".join(parts)
+
+
+def _plural(count: int, noun: str) -> str:
+    return noun if count == 1 else noun + "s"
 
 
 def _meta(finding: Finding) -> str:

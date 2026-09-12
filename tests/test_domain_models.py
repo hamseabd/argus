@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from argus.domain.models import (
+    AgentMetrics,
     ChangedFile,
     Finding,
     PRInfo,
@@ -146,6 +147,14 @@ def test_stage_metrics_default_the_counters_to_zero() -> None:
 
     assert metrics.subagents_run == 0
     assert metrics.output_rejections == 0
+    assert metrics.agents == []
+
+
+def test_agent_metrics_default_every_counter_to_zero() -> None:
+    agent = AgentMetrics(agent="security")
+
+    assert (agent.turns, agent.tool_calls, agent.tool_failures) == (0, 0, 0)
+    assert (agent.output_tokens, agent.cache_read_input_tokens, agent.duration_ms) == (0, 0, 0)
 
 
 def test_review_result_round_trips_through_json() -> None:

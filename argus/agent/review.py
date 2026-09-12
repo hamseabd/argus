@@ -8,12 +8,12 @@ turn a mismatch into ReviewProtocolError.
 
 from pydantic import ValidationError
 
-from argus.agent.hooks import HookState
+from argus.agent.hooks import LEAD_AGENT, HookState
 from argus.agent.options import SPECIALISTS, lead_options, verifier_options
 from argus.agent.prompts import lead_user_prompt, verifier_user_prompt
 from argus.agent.runner import Runner, SdkRunner
 from argus.domain.errors import ReviewProtocolError
-from argus.domain.models import Finding, Review, ReviewContext, Verdict
+from argus.domain.models import AgentMetrics, Finding, Review, ReviewContext, Verdict
 from argus.pipeline import StageOutcome
 from argus.settings import Settings
 from argus.telemetry import get_logger
@@ -42,6 +42,15 @@ class SdkReviewAgent:
             get_logger().warning(
                 "specialists_missing", expected=len(SPECIALISTS), ran=state.subagents_started
             )
+        capped = turn_capped_specialists(
+            outcome.metrics.agents, self._settings.specialist_max_turns
+        )
+        if capped:
+            get_logger().warning(
+                "specialist_turn_cap", agents=capped, max_turns=self._settings.specialist_max_turns
+            )
+        if rerun := rerun_specialists(outcome.metrics.agents):
+            get_logger().warning("specialist_rerun", agents=rerun)
         return StageOutcome(review, outcome.metrics, outcome.session_id)
 
     async def verify(
@@ -66,3 +75,19 @@ class SdkReviewAgent:
                 f"{stage}: output is not a valid Verdict: {exc}", cost, session
             ) from exc
         return StageOutcome(verdict, outcome.metrics, outcome.session_id)
+
+
+def turn_capped_specialists(agents: list[AgentMetrics], max_turns: int) -> list[str]:
+    """Specialists that used every turn they had, so their findings may be incomplete.
+
+    The cap is per run, and a rerun specialist's turns are summed, so those are
+    left to rerun_specialists rather than misreported here.
+    """
+    return [
+        a.agent for a in agents if a.agent != LEAD_AGENT and a.runs == 1 and a.turns >= max_turns
+    ]
+
+
+def rerun_specialists(agents: list[AgentMetrics]) -> list[str]:
+    """Specialists the lead started more than once, against its instructions."""
+    return [a.agent for a in agents if a.agent != LEAD_AGENT and a.runs > 1]

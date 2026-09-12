@@ -1,4 +1,4 @@
-from argus.domain.models import Finding, Review, ReviewResult, StageMetrics, Verdict
+from argus.domain.models import AgentMetrics, Finding, Review, ReviewResult, StageMetrics, Verdict
 from argus.report.markdown import render_report
 
 
@@ -37,6 +37,24 @@ def result(findings: list[Finding], verdicts: list[Verdict] | None = None) -> Re
         duration_ms=70000,
         session_id="sess-1",
     )
+
+
+def test_footer_lists_each_agent_when_the_metrics_carry_them() -> None:
+    plain = result([])
+    agents = [
+        AgentMetrics(agent="lead", turns=4, tool_calls=1),
+        AgentMetrics(agent="security", turns=9, tool_calls=12, duration_ms=48200),
+        AgentMetrics(agent="quality", turns=15, tool_calls=21, duration_ms=61000),
+    ]
+    with_agents = plain.model_copy(
+        update={"metrics": [plain.metrics[0].model_copy(update={"agents": agents})]}
+    )
+
+    assert "Agents:" not in render_report(plain)
+    assert (
+        "\n\nAgents: lead 4 turns, 1 tool call · security 9 turns, 12 tool calls, 48.2 s · "
+        "quality 15 turns, 21 tool calls, 61.0 s"
+    ) in render_report(with_agents)  # its own paragraph, so no renderer folds it into the footer
 
 
 def test_footer_mentions_schema_rejections_only_when_there_were_any() -> None:
