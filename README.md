@@ -163,7 +163,8 @@ jobs:
 
 Argus is checked out from this repository at the commit the caller pinned, never from the repository under review, so the trust model is unchanged: the pull request is read, not executed.
 Pin the commit, as above, because the workflow receives a secret and write access; `v1` is a tag this repository moves forward with compatible releases, and the comment records which release the commit is.
-Call it from `pull_request` events as above; from any other event, such as your own `workflow_dispatch`, pass the pull request number as the `pr` input.
+That caller is for `pull_request` events; its guard and concurrency group assume one.
+To review a pull request from another event, such as your own `workflow_dispatch`, call the workflow with `with: pr: ${{ inputs.pr }}`, key the concurrency group on that number, and drop the guard.
 Argus reads diffs and files, so the language of the reviewed repository does not matter.
 
 ## Development
