@@ -60,7 +60,7 @@ def test_specialists_are_read_only_sonnet_agents() -> None:
         assert isinstance(agent, AgentDefinition)
         assert agent.model == "claude-sonnet-5"
         assert agent.effort == "medium"
-        assert agent.maxTurns == 15
+        assert agent.maxTurns == 25
         assert agent.tools == ["Read", "Grep", "Glob", GIT_HISTORY_TOOL_NAME]
         assert "Agent" not in agent.tools
         assert name in agent.description

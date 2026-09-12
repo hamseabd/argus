@@ -93,6 +93,7 @@ The SDK still reports what the same run would have cost on the API, and the JSON
 | [PR #7](https://github.com/hamseabd/argus/pull/7#pullrequestreview-5174291207): 2 files, 6 findings, 6 verifications | $2.34 | 306 s | 48 |
 | [PR #8](https://github.com/hamseabd/argus/pull/8#pullrequestreview-5178840171): 3 files, 0 findings | $1.37 | 128 s | 22 |
 | PR #8 with the current prompts: 1 finding, 1 verification | $1.02 | 190 s | 5 |
+| [PR #15](https://github.com/hamseabd/argus/pull/15#pullrequestreview-5184949615): 4 files, 0 findings, lead 2 turns | $0.50 | 91 s | 5 |
 
 Most of the input is cache reads: 805,554 of 805,620 input tokens on PR #7.
 The first two runs let the lead re-check findings itself, and it did: 22 to 26 Opus turns re-reading code, $0.88 of the $1.37 on PR #8.
@@ -100,7 +101,8 @@ That is the verify stage's job, so the lead now delegates, merges, and returns, 
 A Sonnet lead was measured on the same diff as well ($0.73, same finding) but it delegated one specialist at a time and made no-op Agent calls, so the lead stays on Opus, where its share of the cost is now negligible.
 The three specialists are now the bulk of a review and vary the most between runs ($0.48 to $0.94 on the same diff).
 The SDK reports usage for a query as a whole, so Argus attributes it itself: each assistant message names the Agent call that spawned its author, and the tool hooks carry the subagent's id, which together give turns, tokens, tool calls, and duration per agent; a specialist that uses every turn it has is logged as `specialist_turn_cap`, since its findings may be incomplete.
-Caps keep a runaway review short: the lead stops at 40 turns or $3.00, each verifier at 10 turns or $0.50.
+Caps keep a runaway review short: the lead stops at 40 turns or $3.00, each specialist at 25 turns, each verifier at 10 turns or $0.50.
+The specialist cap was 15 until the per-agent telemetry showed the quality specialist using all of them on three reviews in a row and reporting nothing; a capped run costs the same and returns less.
 
 ## Usage
 
