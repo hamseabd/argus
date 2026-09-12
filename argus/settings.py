@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     specialist_model: str = "claude-sonnet-5"
     specialist_effort: Effort = "medium"
-    specialist_max_turns: int = Field(default=15, ge=1)
+    specialist_max_turns: int = Field(default=25, ge=1)
 
     verifier_model: str = "claude-sonnet-5"
     verifier_effort: Effort = "medium"

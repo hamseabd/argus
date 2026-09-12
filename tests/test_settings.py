@@ -14,7 +14,7 @@ def test_defaults_match_the_spec() -> None:
     assert s.lead_max_budget_usd == 3.0
     assert s.specialist_model == "claude-sonnet-5"
     assert s.specialist_effort == "medium"
-    assert s.specialist_max_turns == 15
+    assert s.specialist_max_turns == 25
     assert s.verifier_model == "claude-sonnet-5"
     assert s.verifier_effort == "medium"
     assert s.verifier_max_turns == 10
