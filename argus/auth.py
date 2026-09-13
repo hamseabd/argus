@@ -3,7 +3,7 @@
 Argus never reads credentials itself; the Claude Agent SDK does.
 This module only reports which environment variable will supply them and
 whether the value looks usable, so the CLI can fail early with a useful
-message and the smoke script can log which path it exercised.
+message.
 """
 
 import os
