@@ -157,7 +157,7 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
-    uses: hamseabd/argus/.github/workflows/review.yml@e8847dfe8ff24dae9c46a4bcfe925bdda80e0054 # v1
+    uses: hamseabd/argus/.github/workflows/review.yml@339b911e698fce458fdbf33709db5f6e27d76523 # v1
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ARGUS_APP_ID: ${{ secrets.ARGUS_APP_ID }}
