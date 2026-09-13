@@ -6,8 +6,9 @@ Argus is a code-review agent built on the [Claude Agent SDK](https://docs.anthro
 A lead reviewer fans out to three parallel specialist subagents, every finding is checked by an independent verifier before it is reported, and the result lands on the pull request as inline review comments.
 It is read-only by construction, it runs for $0 on GitHub Actions, and it reviews its own pull requests.
 
-**Sample review:** [Argus reviewing the pull request that added its own review workflow](https://github.com/hamseabd/argus/pull/7#pullrequestreview-5174291207).
-Six inline findings, all confirmed by the verifier, including two real trust-model flaws that the next commit fixed.
+**Sample review:** [Argus reviewing the pull request that gave it this identity](https://github.com/hamseabd/argus/pull/10#pullrequestreview-5189614285).
+It confirmed that the new app token was minted without narrowing its permissions, which the next commit fixed, and the footer breaks the run down per agent.
+It reviews other repositories the same way: [a review in apex-agent](https://github.com/hamseabd/apex-agent/pull/5#pullrequestreview-5186879344) caught a supply-chain risk in the workflow that calls it.
 
 ## What it does
 
