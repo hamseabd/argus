@@ -96,6 +96,9 @@ jobs:
         with:
           app-id: ${{ secrets.ARGUS_APP_ID }}
           private-key: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
+          # The token gets only what posting a review needs, whatever the app holds.
+          permission-pull-requests: write
+          permission-contents: read
       - name: Review
         working-directory: target
         run: >-

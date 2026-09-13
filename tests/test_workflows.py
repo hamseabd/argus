@@ -104,6 +104,8 @@ def test_the_review_is_posted_as_the_argus_app() -> None:
     assert mint["with"] == {
         "app-id": "${{ secrets.ARGUS_APP_ID }}",
         "private-key": "${{ secrets.ARGUS_APP_PRIVATE_KEY }}",
+        "permission-pull-requests": "write",  # a ceiling the workflow enforces, not the app
+        "permission-contents": "read",
     }
     assert all_steps.index(mint) == all_steps.index(review) - 1  # shortest token lifetime
     assert review["env"]["GITHUB_TOKEN"] == "${{ steps.argus-app.outputs.token }}"
