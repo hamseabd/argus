@@ -6,7 +6,7 @@ name: argus-review
 # stacks duplicate reviews.
 #
 # Any repository can reuse it: call this file as a reusable workflow at a
-# pinned tag and pass CLAUDE_CODE_OAUTH_TOKEN (see the README). Argus is then
+# pinned tag and pass the same three secrets (see the README). Argus is then
 # checked out from its own repository at that same pinned commit.
 #
 # Trust model: Argus itself is installed and run from a trusted ref, this
@@ -16,6 +16,11 @@ name: argus-review
 # next to the subscription token. Pull requests from forks are skipped on
 # the pull_request event because GitHub gives them no secrets and a
 # read-only token; a maintainer can still review one on demand.
+#
+# Identity: the review is posted with an installation token for the Argus
+# GitHub App, minted just before the review step and revoked when the job
+# ends, so it appears under Argus's own name. The workflow's own token is
+# read-only.
 
 on:
   pull_request:
@@ -36,10 +41,15 @@ on:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: Claude subscription token from `claude setup-token`
         required: true
+      ARGUS_APP_ID:
+        description: App ID of the Argus GitHub App, which must be installed on the calling repository
+        required: true
+      ARGUS_APP_PRIVATE_KEY:
+        description: Private key of the Argus GitHub App
+        required: true
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: argus-${{ github.event.pull_request.number || inputs.pr }}
@@ -80,6 +90,15 @@ jobs:
           enable-cache: true
       - name: Install
         run: uv sync --frozen
+      - name: Mint the Argus app token
+        id: argus-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ARGUS_APP_ID }}
+          private-key: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
+          # The token gets only what posting a review needs, whatever the app holds.
+          permission-pull-requests: write
+          permission-contents: read
       - name: Review
         working-directory: target
         run: >-
@@ -87,7 +106,7 @@ jobs:
           --pr "$PR_NUMBER" --post --json "$GITHUB_WORKSPACE/argus-review.json"
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.argus-app.outputs.token }}
           ARGUS_LOG_FORMAT: json
       - name: Keep the review record
         if: always()

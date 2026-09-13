@@ -131,13 +131,15 @@ Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` en
 ### As a GitHub Action
 
 [`.github/workflows/review.yml`](.github/workflows/review.yml) reviews pull requests on this repository when they open or leave draft, and on demand for a PR number.
-It needs one repository secret, `CLAUDE_CODE_OAUTH_TOKEN`, and the workflow's own `GITHUB_TOKEN` with `pull-requests: write`.
 It does not run on every push, so a busy branch neither burns quota nor stacks duplicate reviews.
+The review is posted by a GitHub App named Argus, through an installation token minted just before the review step and revoked when the job ends, so it appears under Argus's own name and the workflow's own token stays read-only.
+The workflow needs three repository secrets: `CLAUDE_CODE_OAUTH_TOKEN`, and the app's `ARGUS_APP_ID` and `ARGUS_APP_PRIVATE_KEY`.
+The app needs `Pull requests: Read and write` and `Contents: Read-only`, and must be installed on the repository.
 
 #### Reviewing another repository
 
-The same file is a reusable workflow, so any repository can have Argus review its pull requests with a small caller workflow and the one secret.
-This is the caller [apex-agent](https://github.com/hamseabd/apex-agent/pull/5) runs, after Argus reviewed the first draft of it and asked for the commit pin, the explicit draft and fork guard, and the concurrency group:
+The same file is a reusable workflow, so any repository can have Argus review its pull requests with a small caller workflow, the same three secrets, and the Argus app installed on it.
+The caller below is the one [apex-agent](https://github.com/hamseabd/apex-agent/pull/5) runs; Argus reviewed its first draft there and asked for the commit pin, the explicit draft and fork guard, and the concurrency group:
 
 ```yaml
 # .github/workflows/argus-review.yml
@@ -147,7 +149,6 @@ on:
     types: [opened, ready_for_review]
 permissions:
   contents: read
-  pull-requests: write
 concurrency:
   group: argus-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -159,6 +160,8 @@ jobs:
     uses: hamseabd/argus/.github/workflows/review.yml@e8847dfe8ff24dae9c46a4bcfe925bdda80e0054 # v1
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ARGUS_APP_ID: ${{ secrets.ARGUS_APP_ID }}
+      ARGUS_APP_PRIVATE_KEY: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
 ```
 
 Argus is checked out from this repository at the commit the caller pinned, never from the repository under review, so the trust model is unchanged: the pull request is read, not executed.
