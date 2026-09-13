@@ -139,7 +139,7 @@ The app needs `Pull requests: Read and write` and `Contents: Read-only`, and mus
 #### Reviewing another repository
 
 The same file is a reusable workflow, so any repository can have Argus review its pull requests with a small caller workflow, the same three secrets, and the Argus app installed on it.
-The caller below is the one [apex-agent](https://github.com/hamseabd/apex-agent/pull/5) runs; Argus reviewed its first draft there and asked for the commit pin, the explicit draft and fork guard, and the concurrency group:
+The caller below is the one [apex-agent](https://github.com/hamseabd/apex-agent/pull/7) runs; Argus reviewed its first draft there and asked for the commit pin and the explicit draft and fork guard:
 
 ```yaml
 # .github/workflows/argus-review.yml
@@ -149,9 +149,6 @@ on:
     types: [opened, ready_for_review]
 permissions:
   contents: read
-concurrency:
-  group: argus-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 jobs:
   review:
     if: >-
@@ -166,8 +163,9 @@ jobs:
 
 Argus is checked out from this repository at the commit the caller pinned, never from the repository under review, so the trust model is unchanged: the pull request is read, not executed.
 Pin the commit, as above, because the workflow receives a secret and write access; `v1` is a tag this repository moves forward with compatible releases, and the comment records which release the commit is.
-That caller is for `pull_request` events; its guard and concurrency group assume one.
-To review a pull request from another event, such as your own `workflow_dispatch`, call the workflow with `with: pr: ${{ inputs.pr }}`, key the concurrency group on that number, and drop the guard.
+That caller is for `pull_request` events; its guard assumes one.
+To review a pull request from another event, such as your own `workflow_dispatch`, call the workflow with `with: pr: ${{ inputs.pr }}` and drop the guard.
+Do not add a `concurrency` group to the caller: the reusable workflow already keys one on the pull request number, and a caller group with the same key makes GitHub cancel both runs as a deadlock at startup.
 Argus reads diffs and files, so the language of the reviewed repository does not matter.
 
 ## Development
