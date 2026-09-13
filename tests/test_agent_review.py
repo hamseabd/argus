@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage
 
+from argus.agent.hooks import HookState
 from argus.agent.review import SdkReviewAgent, rerun_specialists, turn_capped_specialists
 from argus.agent.runner import SdkRunner
 from argus.domain.errors import ReviewProtocolError
@@ -139,6 +140,33 @@ def test_a_specialist_run_twice_is_reported_as_rerun_not_as_capped() -> None:
 
     assert turn_capped_specialists(agents, max_turns=15) == []
     assert rerun_specialists(agents) == ["security"]
+
+
+class StateSpy:
+    """A runner that records the HookState each stage was given."""
+
+    def __init__(self, inner: SdkRunner) -> None:
+        self.inner = inner
+        self.states: list[HookState] = []
+
+    async def run(self, prompt: str, options: ClaudeAgentOptions, *, stage: str, state: HookState):
+        self.states.append(state)
+        return await self.inner.run(prompt, options, stage=stage, state=state)
+
+
+def test_the_lead_runs_with_a_reading_budget_and_the_verifier_without_one(tmp_path: Path) -> None:
+    recorder = Recorder(
+        result({"summary": "s", "files_reviewed": [], "findings": []}),
+        result({"verdict": "confirmed", "reasoning": "r", "confidence": 0.7}),
+    )
+    spy = StateSpy(SdkRunner(query_fn=recorder))
+    reviewer = SdkReviewAgent(Settings(_env_file=None, lead_read_budget=7), runner=spy)
+
+    asyncio.run(reviewer.review(context(tmp_path)))
+    asyncio.run(reviewer.verify(context(tmp_path), Finding(id="security-1", **RAW_FINDING), ""))
+
+    assert spy.states[0].read_budget == 7
+    assert spy.states[1].read_budget is None  # the verifier reads as much as it needs
 
 
 def test_review_warns_when_fewer_than_three_specialists_ran(tmp_path: Path) -> None:

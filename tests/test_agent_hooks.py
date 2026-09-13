@@ -8,9 +8,13 @@ from argus.agent.hooks import (
     DENIED_TOOL_MATCHER,
     DENIED_TOOLS,
     LEAD_AGENT,
+    READ_TOOL_MATCHER,
+    READ_TOOLS,
+    STRUCTURED_OUTPUT_TOOL,
     HookState,
     build_hooks,
     deny_mutating_tools,
+    limit_lead_reading,
 )
 
 
@@ -170,6 +174,72 @@ def test_subagent_duration_is_measured_from_start_to_stop() -> None:
     assert state.agent_types["a-q"] == "quality"
 
 
+def test_the_lead_may_read_up_to_its_budget() -> None:
+    state = HookState(read_budget=2)
+    hook = limit_lead_reading(state)
+
+    assert asyncio.run(hook(hook_input("Read"), None, {"signal": None})) == {}
+    assert asyncio.run(hook(hook_input("Grep"), None, {"signal": None})) == {}
+    assert state.lead_reads == 2
+    assert state.reads_denied == 0
+
+
+def test_a_read_past_the_budget_is_denied_and_says_what_to_do_instead() -> None:
+    state = HookState(read_budget=1)
+    hook = limit_lead_reading(state)
+    asyncio.run(hook(hook_input("Read"), None, {"signal": None}))
+
+    out = asyncio.run(hook(hook_input("Read"), None, {"signal": None}))
+
+    specific = out["hookSpecificOutput"]
+    assert specific["hookEventName"] == "PreToolUse"
+    assert specific["permissionDecision"] == "deny"
+    assert "specialists" in specific["permissionDecisionReason"]
+    assert state.reads_denied == 1
+    assert state.lead_reads == 1  # a refused read is not spent
+    assert state.denied == 0  # that counter is for mutating tools
+
+
+def test_the_budget_never_blocks_delegation_or_the_final_answer() -> None:
+    state = HookState(read_budget=0)
+    hook = limit_lead_reading(state)
+
+    assert asyncio.run(hook(hook_input("Agent"), None, {"signal": None})) == {}
+    assert asyncio.run(hook(hook_input(STRUCTURED_OUTPUT_TOOL), None, {"signal": None})) == {}
+    assert state.reads_denied == 0
+
+
+def test_a_specialist_reads_on_its_own_budget_not_the_lead_s() -> None:
+    state = HookState(read_budget=1)
+    hook = limit_lead_reading(state)
+    inside = {"agent_id": "a-sec", "agent_type": "security"}
+
+    for _ in range(3):
+        assert asyncio.run(hook(hook_input("Read", **inside), None, {"signal": None})) == {}
+
+    assert state.lead_reads == 0
+    assert state.reads_denied == 0
+
+
+def test_without_a_budget_the_main_thread_reads_freely() -> None:
+    state = HookState()  # the verifier: reading the code is its whole job
+    hook = limit_lead_reading(state)
+
+    for _ in range(20):
+        assert asyncio.run(hook(hook_input("Read"), None, {"signal": None})) == {}
+
+    assert state.reads_denied == 0
+
+
+def test_the_read_matcher_covers_every_read_tool_and_nothing_else() -> None:
+    pattern = re.compile(f"^({READ_TOOL_MATCHER})$")
+
+    for name in READ_TOOLS:
+        assert pattern.match(name), name
+    for name in ("Agent", STRUCTURED_OUTPUT_TOOL, *DENIED_TOOLS):
+        assert not pattern.match(name), name
+
+
 def test_build_hooks_registers_the_expected_events_and_matchers() -> None:
     hooks = build_hooks(HookState())
 
@@ -180,7 +250,7 @@ def test_build_hooks_registers_the_expected_events_and_matchers() -> None:
         "SubagentStart",
         "SubagentStop",
     }
-    assert hooks["PreToolUse"][0].matcher == DENIED_TOOL_MATCHER
+    assert [m.matcher for m in hooks["PreToolUse"]] == [DENIED_TOOL_MATCHER, READ_TOOL_MATCHER]
     assert hooks["PostToolUse"][0].matcher is None
     for matchers in hooks.values():
         for matcher in matchers:

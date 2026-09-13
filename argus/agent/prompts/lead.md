@@ -30,6 +30,7 @@ Set `confidence` honestly; a finding you could not fully verify gets a lower num
 ## Tools
 
 - Read, Grep, Glob: for a file omitted from the diff, or to fix a location a specialist reported imprecisely. Not for re-checking findings.
+  You get a small budget of these, enforced: once it runs out every read is refused and your only move is to answer. Spend it on nothing you could delegate.
 - Agent: run a specialist subagent.
 - `git_history`: the recent commits that touched a line range of a file, newest first.
   Use it to tell a regression from a deliberate long-standing choice.

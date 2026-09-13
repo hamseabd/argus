@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     lead_model: str = "claude-opus-5"
     lead_effort: Effort = "high"
     lead_max_turns: int = Field(default=40, ge=1)
+    lead_read_budget: int = Field(
+        default=10,
+        ge=0,
+        description="Reads the lead may make itself before it must answer; the specialists read.",
+    )
     lead_max_budget_usd: float = Field(default=3.0, gt=0)
 
     specialist_model: str = "claude-sonnet-5"
