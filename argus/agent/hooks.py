@@ -27,6 +27,9 @@ DENIED_TOOLS = frozenset(
 )
 DENIED_TOOL_MATCHER = "|".join(sorted(DENIED_TOOLS))
 ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Agent", GIT_HISTORY_TOOL_NAME)
+READ_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", GIT_HISTORY_TOOL_NAME)
+"""The tools that only look at code; the lead's reading budget governs these."""
+READ_TOOL_MATCHER = "|".join(sorted(READ_TOOLS))
 STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
 """The SDK's internal tool that validates the final answer against the output schema.
 
@@ -67,6 +70,10 @@ class HookState:
     """By agent_id, with LEAD_AGENT for the main thread."""
     agent_types: dict[str, str] = field(default_factory=dict)
     """agent_id to agent type, as the hooks reported it."""
+    read_budget: int | None = None
+    """Reads the main thread may make before it must answer; None means no limit."""
+    lead_reads: int = 0
+    reads_denied: int = 0
     clock: Callable[[], float] = time.monotonic
 
     def agent(self, data: dict[str, Any]) -> AgentCounters:
@@ -93,6 +100,39 @@ def deny_mutating_tools(state: HookState) -> Hook:
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": reason,
+            }
+        }
+
+    return hook
+
+
+def limit_lead_reading(state: HookState) -> Hook:
+    """Stop the lead reviewer from re-reading the change it has delegated.
+
+    The lead delegates and merges; the specialists read, and the verifier
+    reads again for every finding. Measured runs still showed the lead
+    spending forty tool calls on a sweep of its own, so the budget is
+    enforced here instead of asked for in the prompt. Only reading is
+    refused: delegation and the final answer always go through.
+    """
+
+    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+        budget = state.read_budget
+        if budget is None or data.get("agent_id") or data.get("tool_name") not in READ_TOOLS:
+            return {}
+        if state.lead_reads < budget:
+            state.lead_reads += 1
+            return {}
+        state.reads_denied += 1
+        get_logger().warning("lead_read_denied", tool=data.get("tool_name"), budget=budget)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    f"You have used the {budget} reads a lead gets. The specialists have read "
+                    "the change for you: merge what they reported and answer with the Review."
+                ),
             }
         }
 
@@ -156,7 +196,8 @@ def on_subagent_stop(state: HookState) -> Hook:
 def build_hooks(state: HookState) -> dict[HookEvent, list[HookMatcher]]:
     return {
         "PreToolUse": [
-            HookMatcher(matcher=DENIED_TOOL_MATCHER, hooks=[deny_mutating_tools(state)])
+            HookMatcher(matcher=DENIED_TOOL_MATCHER, hooks=[deny_mutating_tools(state)]),
+            HookMatcher(matcher=READ_TOOL_MATCHER, hooks=[limit_lead_reading(state)]),
         ],
         "PostToolUse": [HookMatcher(hooks=[audit_tool_call(state)])],
         "PostToolUseFailure": [HookMatcher(hooks=[audit_tool_failure(state)])],

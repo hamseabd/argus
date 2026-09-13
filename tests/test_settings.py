@@ -11,6 +11,7 @@ def test_defaults_match_the_spec() -> None:
     assert s.lead_model == "claude-opus-5"
     assert s.lead_effort == "high"
     assert s.lead_max_turns == 40
+    assert s.lead_read_budget == 10
     assert s.lead_max_budget_usd == 3.0
     assert s.specialist_model == "claude-sonnet-5"
     assert s.specialist_effort == "medium"

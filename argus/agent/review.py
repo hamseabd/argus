@@ -25,7 +25,7 @@ class SdkReviewAgent:
         self._runner = runner or SdkRunner()
 
     async def review(self, context: ReviewContext) -> StageOutcome[Review]:
-        state = HookState()
+        state = HookState(read_budget=self._settings.lead_read_budget)
         options = lead_options(self._settings, context, state)
         outcome = await self._runner.run(
             lead_user_prompt(context), options, stage="review", state=state
