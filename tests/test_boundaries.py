@@ -37,7 +37,7 @@ def test_importing_the_non_agent_modules_does_not_load_the_sdk() -> None:
     subprocess.run([sys.executable, "-c", code], check=True, cwd=ROOT)
 
 
-def test_no_print_outside_scripts() -> None:
+def test_the_package_never_prints() -> None:
     offenders = [
         path.relative_to(ROOT)
         for path in PACKAGE.rglob("*.py")

@@ -20,7 +20,7 @@ The README is the design document; keep it accurate when behavior changes. Worki
 - Cost to operate is $0: no cloud resources, no API key. Claude auth is `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`; reviews are posted with a short-lived installation token of the Argus GitHub App (`ARGUS_APP_ID`, `ARGUS_APP_PRIVATE_KEY`), never a personal token.
 - The agent is read-only. It never writes, edits, or runs code in the target repo. `allowed_tools` plus a `PreToolUse` deny hook enforce this.
 - Only `argus/agent/` imports `claude_agent_sdk`.
-- Structured logs, never `print`, outside of `scripts/`.
+- Structured logs, never `print`.
 - One branch, one PR, one squash-merge per increment. Hamse merges. Verify before opening the PR and paste the evidence in the PR body.
 - TDD: failing test first.
 
