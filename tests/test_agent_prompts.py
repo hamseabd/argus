@@ -52,6 +52,13 @@ def test_lead_prompt_makes_delegation_mandatory_and_names_the_output() -> None:
     assert "git_history" in text
 
 
+def test_lead_prompt_warns_that_its_reading_budget_is_enforced() -> None:
+    text = load_prompt("lead")
+
+    assert "budget" in text
+    assert "enforced" in text
+
+
 def test_lead_prompt_leaves_verification_to_the_verify_stage() -> None:
     text = load_prompt("lead")
 
