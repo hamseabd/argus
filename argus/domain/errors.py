@@ -13,13 +13,26 @@ class ArgusError(Exception):
 
 
 class AgentRunError(ArgusError):
-    """A query ended with a non-success result subtype."""
+    """A query ended with a non-success result subtype.
 
-    def __init__(self, subtype: str, cost_usd: float, session_id: str | None = None) -> None:
+    `detail` carries why, when the SDK says: an API status, the CLI's own
+    error output. Without it a failure reads as a bare exception name, which
+    is all a CI log would show.
+    """
+
+    def __init__(
+        self,
+        subtype: str,
+        cost_usd: float,
+        session_id: str | None = None,
+        detail: str | None = None,
+    ) -> None:
         self.subtype = subtype
         self.cost_usd = cost_usd
         self.session_id = session_id
-        super().__init__(f"agent run ended with {subtype} after ${cost_usd:.2f}")
+        self.detail = detail
+        message = f"agent run ended with {subtype} after ${cost_usd:.2f}"
+        super().__init__(f"{message}: {detail}" if detail else message)
 
 
 class ReviewProtocolError(ArgusError):

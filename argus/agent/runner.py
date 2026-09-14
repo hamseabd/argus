@@ -8,6 +8,7 @@ that ends without a result, and an exception raised by the SDK itself
 (which is how a budget overrun surfaces).
 """
 
+import re
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -28,6 +29,14 @@ from argus.domain.models import StageMetrics
 from argus.telemetry import bind_run, get_logger
 
 QueryFn = Callable[..., AsyncIterator[Any]]
+
+_DETAIL_CHARS = 300
+_CREDENTIAL = re.compile(r"(sk-ant-|gh[pousr]_|github_pat_)[A-Za-z0-9_\-]{8,}")
+"""Review logs are public on a public repository; nothing token-shaped goes into one.
+
+Both credentials the review step holds are covered: the Claude subscription
+token it runs on, and the app installation token it posts with.
+"""
 
 
 @dataclass(frozen=True)
@@ -81,6 +90,7 @@ class SdkRunner:
                 subtype=f"sdk_error:{type(exc).__name__}",
                 cost_usd=result.total_cost_usd or 0.0 if result else 0.0,
                 session_id=result.session_id if result else None,
+                detail=_why(exc),
             ) from exc
         if result is None:
             raise ReviewProtocolError(f"{stage}: the query ended without a result message")
@@ -117,3 +127,18 @@ class SdkRunner:
             metrics=metrics,
             session_id=result.session_id,
         )
+
+
+def _why(exc: ClaudeSDKError) -> str | None:
+    """What the SDK can tell us about a failure, in one line, minus anything token-shaped."""
+    parts: list[str] = []
+    if status := getattr(exc, "api_error_status", None):
+        parts.append(f"api status {status}")
+    if reason := getattr(exc, "terminal_reason", None):
+        parts.append(str(reason))
+    if stderr := (getattr(exc, "stderr", None) or "").strip():
+        parts.append(stderr.splitlines()[-1])
+    if not parts and (text := str(exc).strip()):
+        parts.append(text)
+    detail = _CREDENTIAL.sub("[redacted]", "; ".join(parts))
+    return detail[:_DETAIL_CHARS] if detail else None
