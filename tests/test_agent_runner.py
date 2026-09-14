@@ -6,9 +6,11 @@ import pytest
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    CLIConnectionError,
     ProcessError,
     RateLimitEvent,
     RateLimitInfo,
+    ResultError,
     ResultMessage,
     TextBlock,
     ToolUseBlock,
@@ -175,6 +177,46 @@ def test_sdk_exceptions_become_agent_run_errors() -> None:
     assert info.value.subtype == "sdk_error:ProcessError"
     assert info.value.cost_usd == 0.0
     assert "boom" in str(info.value.__cause__)
+
+
+def test_a_failed_run_says_why_not_only_that_it_failed() -> None:
+    """The reason lives on the exception; without it CI shows a bare error name."""
+    failure = ResultError(
+        "run failed",
+        data={
+            "subtype": "error_during_execution",
+            "api_error_status": 401,
+            "terminal_reason": "api_error",
+        },
+        exit_code=1,
+    )
+
+    with pytest.raises(AgentRunError) as info:
+        asyncio_run(run(runner_for(failure)))
+
+    message = str(info.value)
+    assert "401" in message
+    assert "api_error" in message
+    assert info.value.detail
+
+
+def test_a_credential_in_the_failure_is_redacted() -> None:
+    """Review logs are public on a public repository, so nothing token-shaped goes in one."""
+    leaked = "sk-ant-oat01-" + "A1b2C3d4" * 11
+    failure = ProcessError("cli died", exit_code=1, stderr=f"invalid token {leaked}")
+
+    with pytest.raises(AgentRunError) as info:
+        asyncio_run(run(runner_for(failure)))
+
+    assert leaked not in str(info.value)
+    assert "[redacted]" in str(info.value)
+
+
+def test_a_failure_with_nothing_structured_still_reports_its_message() -> None:
+    with pytest.raises(AgentRunError) as info:
+        asyncio_run(run(runner_for(CLIConnectionError("cannot reach the CLI"))))
+
+    assert "cannot reach the CLI" in str(info.value)
 
 
 def test_missing_usage_and_cost_default_to_zero() -> None:
