@@ -212,6 +212,34 @@ def test_a_credential_in_the_failure_is_redacted() -> None:
     assert "[redacted]" in str(info.value)
 
 
+@pytest.mark.parametrize(
+    "credential",
+    [
+        "sk-ant-oat01-" + "A1b2C3d4" * 11,
+        "ghs_" + "A1b2C3d4" * 5,  # the app installation token the review step is given
+        "ghp_" + "A1b2C3d4" * 5,
+        "github_pat_" + "A1b2C3d4" * 8,
+    ],
+)
+def test_every_credential_shape_in_reach_is_redacted(credential: str) -> None:
+    failure = ProcessError("cli died", exit_code=1, stderr=f"rejected: {credential}")
+
+    with pytest.raises(AgentRunError) as info:
+        asyncio_run(run(runner_for(failure)))
+
+    assert credential not in str(info.value)
+    assert "[redacted]" in str(info.value)
+
+
+def test_a_wall_of_cli_output_cannot_become_the_error_message() -> None:
+    failure = ProcessError("cli died", exit_code=1, stderr="x" * 5000)
+
+    with pytest.raises(AgentRunError) as info:
+        asyncio_run(run(runner_for(failure)))
+
+    assert len(info.value.detail or "") == 300
+
+
 def test_a_failure_with_nothing_structured_still_reports_its_message() -> None:
     with pytest.raises(AgentRunError) as info:
         asyncio_run(run(runner_for(CLIConnectionError("cannot reach the CLI"))))

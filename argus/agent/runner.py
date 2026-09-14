@@ -31,8 +31,12 @@ from argus.telemetry import bind_run, get_logger
 QueryFn = Callable[..., AsyncIterator[Any]]
 
 _DETAIL_CHARS = 300
-_CREDENTIAL = re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}")
-"""Review logs are public on a public repository; nothing token-shaped goes into one."""
+_CREDENTIAL = re.compile(r"(sk-ant-|gh[pousr]_|github_pat_)[A-Za-z0-9_\-]{8,}")
+"""Review logs are public on a public repository; nothing token-shaped goes into one.
+
+Both credentials the review step holds are covered: the Claude subscription
+token it runs on, and the app installation token it posts with.
+"""
 
 
 @dataclass(frozen=True)
