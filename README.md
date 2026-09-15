@@ -10,6 +10,9 @@ The harness is read-only by construction, runs for $0 on GitHub Actions, and rev
 It confirmed that the new app token was minted without narrowing its permissions, which the next commit fixed, and the footer carries the per-agent telemetry.
 It reviews other repositories the same way: [a review in apex-agent](https://github.com/hamseabd/apex-agent/pull/5#pullrequestreview-5186879344) caught a supply-chain risk in the workflow that calls it.
 
+**Write-up:** [I built the code-review agent. Here's what the whiteboard version leaves out.](https://hamseabd.github.io/posts/argus-code-review-agent/)
+Why it verifies by refutation, why it indexes nothing, and what the per-agent telemetry changed.
+
 ![An Argus inline comment on PR #21: a MEDIUM security finding on the credential redaction regex, confirmed by the verifier](.github/images/pr-21-inline.png)
 
 An inline finding on [PR #21](https://github.com/hamseabd/argus/pull/21#discussion_r4002077053): the redaction regex covered Claude tokens but not the GitHub token in the same environment.
