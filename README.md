@@ -22,7 +22,7 @@ It reviews other repositories the same way: [a review in apex-agent](https://git
 ## Design decisions
 
 - **Python owns the pipeline; the SDK owns the fan-out inside one query.** The pipeline speaks domain types behind a `ReviewAgent` protocol, so the whole flow runs under test with a fake agent, and only `argus/agent/` imports the SDK, which [`tests/test_boundaries.py`](tests/test_boundaries.py) enforces.
-- **Findings are verified in a fresh query whose only job is to refute them, not by the lead that reported them.** The first runs let the lead re-check its own findings, and that was 22 to 26 Opus turns and $0.88 of the $1.37 on PR #8 ([#9](https://github.com/hamseabd/argus/pull/9)).
+- **Findings are verified in a fresh query whose only job is to refute them, not by the lead that reported them.** The lead re-checking its own findings was measured and removed ([#9](https://github.com/hamseabd/argus/pull/9); the numbers are [under Cost](#what-the-measurements-changed)).
 A finding that survives an independent refutation attempt is reported; one that fails is reported as `unverified`, never as confirmed.
 - **Read-only by three mechanisms: the tool set, a `PreToolUse` deny hook, and `setting_sources=[]`.** Defense in depth, and the repository under review cannot reach the reviewer through its own settings, hooks, or `CLAUDE.md` ([`argus/agent/options.py`](argus/agent/options.py), [`argus/agent/hooks.py`](argus/agent/hooks.py)).
 - **Output schemas are derived from the domain models and carry length floors on prose fields.** The schema and the model cannot drift, and a placeholder that merely fits the shape is rejected and counted ([#13](https://github.com/hamseabd/argus/pull/13)).
@@ -189,12 +189,12 @@ Argus reads diffs and files, so the language of the reviewed repository does not
 
 ## How it was built
 
-- **The design came before the code.** A design spec and an increment plan were committed before the first line of it ([`a26ca3e`](https://github.com/hamseabd/argus/commit/a26ca3e)).
+- **The design came before the code.** A design spec and an increment plan were committed before the first line of code ([`a26ca3e`](https://github.com/hamseabd/argus/commit/a26ca3e)).
 - **One increment, one branch, one pull request, one squash-merge.** Every pull request body has the same four parts: why, what changed, a definition of done, and the verification output pasted in ([#19](https://github.com/hamseabd/argus/pull/19) is the shape).
 - **The failing test comes first.** The unit tests run offline without credentials or network: the pipeline through a fake agent, the runner through a recorded SDK message stream, the GitHub client through `respx`, and the diff parser against fixtures that git itself generated.
-An opt-in live test builds a repository with a seeded SQL injection and an off-by-one on a feature branch and asserts the real SDK confirms a finding in one of the seeded files ([`tests/test_live.py`](tests/test_live.py)).
+An opt-in live test builds a repository with a seeded SQL injection and an off-by-one on a feature branch and asserts Argus, running against the real SDK, confirms a finding in one of the seeded files ([`tests/test_live.py`](tests/test_live.py)).
 - **Architecture rules are tests, not comments.** [`tests/test_boundaries.py`](tests/test_boundaries.py) proves that only `argus/agent/` imports the SDK, by source scan and by a subprocess import, and that nothing in the package prints; [`tests/test_workflows.py`](tests/test_workflows.py) asserts the review workflow's triggers, permissions, timeout, and concurrency.
-- **Argus reviews its own pull requests.** Every one since [#7](https://github.com/hamseabd/argus/pull/7) landed the workflow is reviewed by Argus via the Action, and each finding is dispositioned in the thread: on [#21](https://github.com/hamseabd/argus/pull/21) two were fixed before merge.
+- **Argus reviews its own pull requests.** Every pull request since [#7](https://github.com/hamseabd/argus/pull/7), which landed the workflow, is reviewed by Argus via the Action, and each finding is dispositioned in the thread: on [#21](https://github.com/hamseabd/argus/pull/21) two were fixed before merge.
 - **Decisions were changed by measurement, not preference.** [What the measurements changed](#what-the-measurements-changed) lists the five.
 - Claude Code was the pair programmer throughout; the design, the failing tests, the review of every diff, and every merge were the author's.
 
