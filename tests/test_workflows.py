@@ -1,4 +1,4 @@
-"""The dogfood workflow's shape, checked mechanically so a careless edit cannot widen it."""
+"""The workflow and Dependabot shapes, checked mechanically so a careless edit cannot widen them."""
 
 from pathlib import Path
 
@@ -143,3 +143,11 @@ def test_every_dependabot_update_checks_the_repository_root_weekly() -> None:
     for update in dependabot()["updates"]:
         assert update["directory"] == "/", update["package-ecosystem"]
         assert update["schedule"]["interval"] == "weekly", update["package-ecosystem"]
+
+
+def test_dependabot_batches_minor_and_patch_into_one_pull_request_per_ecosystem() -> None:
+    for update in dependabot()["updates"]:
+        (group,) = update["groups"].values()  # one group, so one PR, majors still separate
+
+        assert group["patterns"] == ["*"], update["package-ecosystem"]
+        assert set(group["update-types"]) == {"minor", "patch"}, update["package-ecosystem"]
