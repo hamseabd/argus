@@ -19,6 +19,15 @@ It reviews other repositories the same way: [a review in apex-agent](https://git
 - **Never touches the repository.** Reviewers get `Read`, `Grep`, `Glob`, `Agent`, and one custom read-only tool. Mutating tools are removed from the tool set and denied again by a `PreToolUse` hook.
 - **Explains itself.** Structured JSON logs carry cost, tokens, turns, duration, subagent count, and rejected structured outputs per stage, plus a tool-call audit trail, under one `run_id`. The review stage is also broken down per agent: turns, tool calls, tokens, and duration for the lead and each specialist, in the JSON artifact and the report footer.
 
+## Design decisions
+
+- **Python owns the pipeline; the SDK owns the fan-out inside one query.** The pipeline speaks domain types behind a `ReviewAgent` protocol, so the whole flow runs under test with a fake agent, and only `argus/agent/` imports the SDK, which [`tests/test_boundaries.py`](tests/test_boundaries.py) enforces.
+- **Findings are verified in a fresh query whose only job is to refute them, not by the lead that reported them.** The first runs let the lead re-check its own findings, and that was 22 to 26 Opus turns and $0.88 of the $1.37 on PR #8 ([#9](https://github.com/hamseabd/argus/pull/9)).
+A finding that survives an independent refutation attempt is reported; one that fails is reported as `unverified`, never as confirmed.
+- **Read-only by three mechanisms: the tool set, a `PreToolUse` deny hook, and `setting_sources=[]`.** Defense in depth, and the repository under review cannot reach the reviewer through its own settings, hooks, or `CLAUDE.md` ([`argus/agent/options.py`](argus/agent/options.py), [`argus/agent/hooks.py`](argus/agent/hooks.py)).
+- **Output schemas are derived from the domain models and carry length floors on prose fields.** The schema and the model cannot drift, and a placeholder that merely fits the shape is rejected and counted ([#13](https://github.com/hamseabd/argus/pull/13)).
+- **A subscription token, no API key, and no cloud resources.** The cost to operate is $0: a review costs quota, and the SDK still reports what it would have cost on the API.
+
 ## Architecture
 
 ```mermaid
@@ -87,6 +96,8 @@ The lead gets a small budget of its own reads (ten), enforced by a hook: once it
 
 ## Cost
 
+### What a review costs
+
 Argus authenticates with a Claude subscription token from `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`), so a review costs quota, not money.
 The SDK still reports what the same run would have cost on the API, and the JSON artifact breaks it down per stage.
 
@@ -94,20 +105,23 @@ The SDK still reports what the same run would have cost on the API, and the JSON
 |---|---|---|---|
 | [PR #7](https://github.com/hamseabd/argus/pull/7#pullrequestreview-5174291207): 2 files, 6 findings, 6 verifications | $2.34 | 306 s | 48 |
 | [PR #8](https://github.com/hamseabd/argus/pull/8#pullrequestreview-5178840171): 3 files, 0 findings | $1.37 | 128 s | 22 |
-| PR #8 with the current prompts: 1 finding, 1 verification | $1.02 | 190 s | 5 |
+| PR #8 re-run locally with the current prompts: 1 finding, 1 verification | $1.02 | 190 s | 5 |
 | [PR #15](https://github.com/hamseabd/argus/pull/15#pullrequestreview-5184949615): 4 files, 0 findings, lead 2 turns | $0.50 | 91 s | 5 |
 | [PR #10](https://github.com/hamseabd/argus/pull/10#pullrequestreview-5189614285): 4 files, 1 finding, lead 43 tool calls | $2.49 | 319 s | 12 |
 
 Most of the input is cache reads: 805,554 of 805,620 input tokens on PR #7.
-The first two runs let the lead re-check findings itself, and it did: 22 to 26 Opus turns re-reading code, $0.88 of the $1.37 on PR #8.
-That is the verify stage's job, so the lead now delegates, merges, and returns, and its own thread costs about $0.06.
-A Sonnet lead was measured on the same diff as well ($0.73, same finding) but it delegated one specialist at a time and made no-op Agent calls, so the lead stays on Opus, where its share of the cost is now negligible.
-What is left of the spread is the lead's own reading. Per-agent telemetry put a number on it: 2 tool calls on the $0.42 review of PR #18, 43 on the $2.49 review of PR #10, where it also delegated to its three specialists 16 seconds apart instead of in one message.
-The prompt had forbidden both for several increments, so the budget above is enforced in a hook instead, which bounds the expensive tail without touching a normal review.
 The three specialists are the rest of a review and vary between runs ($0.48 to $0.94 on the same diff).
-The SDK reports usage for a query as a whole, so Argus attributes it itself: each assistant message names the Agent call that spawned its author, and the tool hooks carry the subagent's id, which together give turns, tokens, tool calls, and duration per agent; a specialist that uses every turn it has is logged as `specialist_turn_cap`, since its findings may be incomplete.
 Caps keep a runaway review short: the lead stops at 40 turns or $3.00, each specialist at 25 turns, each verifier at 10 turns or $0.50.
-The specialist cap was 15 until the per-agent telemetry showed the quality specialist using all of them on three reviews in a row and reporting nothing; a capped run costs the same and returns less.
+
+### What the measurements changed
+
+- **[#9](https://github.com/hamseabd/argus/pull/9).** The first two runs let the lead re-check findings itself, and it did: 22 to 26 Opus turns re-reading code, $0.88 of the $1.37 on PR #8.
+That is the verify stage's job, so the lead now delegates, merges, and returns, and its own thread costs about $0.06.
+- **[#11](https://github.com/hamseabd/argus/pull/11).** A Sonnet lead was measured on the same diff as well ($0.73, same finding) but it delegated one specialist at a time and made no-op Agent calls, so the lead stays on Opus, where its share of the cost is now negligible.
+- **[#14](https://github.com/hamseabd/argus/pull/14).** The SDK reports usage for a query as a whole, so Argus attributes it itself: each assistant message names the Agent call that spawned its author, and the tool hooks carry the subagent's id, which together give turns, tokens, tool calls, and duration per agent; a specialist that uses every turn it has is logged as `specialist_turn_cap`, since its findings may be incomplete.
+- **[#15](https://github.com/hamseabd/argus/pull/15).** The specialist cap was 15 until the per-agent telemetry showed the quality specialist using all of them on three reviews in a row and reporting nothing; a capped run costs the same and returns less.
+- **[#19](https://github.com/hamseabd/argus/pull/19).** What is left of the spread is the lead's own reading. Per-agent telemetry put a number on it: 2 tool calls on the $0.42 review of PR #18, 43 on the $2.49 review of PR #10, where it also delegated to its three specialists 16 seconds apart instead of in one message.
+The prompt had forbidden both for several increments, so the read budget is enforced in a hook instead, which bounds the expensive tail without touching a normal review.
 
 ## Usage
 
@@ -173,6 +187,17 @@ To review a pull request from another event, such as your own `workflow_dispatch
 Do not add a `concurrency` group to the caller: the reusable workflow already keys one on the pull request number, and a caller group with the same key makes GitHub cancel both runs as a deadlock at startup.
 Argus reads diffs and files, so the language of the reviewed repository does not matter.
 
+## How it was built
+
+- **The design came before the code.** A design spec and an increment plan were committed before the first line of it ([`a26ca3e`](https://github.com/hamseabd/argus/commit/a26ca3e)).
+- **One increment, one branch, one pull request, one squash-merge.** Every pull request body has the same four parts: why, what changed, a definition of done, and the verification output pasted in ([#19](https://github.com/hamseabd/argus/pull/19) is the shape).
+- **The failing test comes first.** The unit tests run offline without credentials or network: the pipeline through a fake agent, the runner through a recorded SDK message stream, the GitHub client through `respx`, and the diff parser against fixtures that git itself generated.
+An opt-in live test builds a repository with a seeded SQL injection and an off-by-one on a feature branch and asserts the real SDK confirms a finding in one of the seeded files ([`tests/test_live.py`](tests/test_live.py)).
+- **Architecture rules are tests, not comments.** [`tests/test_boundaries.py`](tests/test_boundaries.py) proves that only `argus/agent/` imports the SDK, by source scan and by a subprocess import, and that nothing in the package prints; [`tests/test_workflows.py`](tests/test_workflows.py) asserts the review workflow's triggers, permissions, timeout, and concurrency.
+- **Argus reviews its own pull requests.** Every one since [#7](https://github.com/hamseabd/argus/pull/7) landed the workflow is reviewed by Argus via the Action, and each finding is dispositioned in the thread: on [#21](https://github.com/hamseabd/argus/pull/21) two were fixed before merge.
+- **Decisions were changed by measurement, not preference.** [What the measurements changed](#what-the-measurements-changed) lists the five.
+- Claude Code was the pair programmer throughout; the design, the failing tests, the review of every diff, and every merge were the author's.
+
 ## Development
 
 ```bash
@@ -183,11 +208,7 @@ uv run pytest -q             # unit tests, offline
 uv run pytest -m live -s     # opt-in: the real SDK against a seeded-bug fixture
 ```
 
-The unit tests run without credentials or network: the pipeline is exercised through a fake agent, the runner through a recorded message stream, the GitHub client through `respx`, and the diff parser against fixtures that git itself generated.
-The live test builds a repository with a seeded SQL injection and an off-by-one on a feature branch and asserts Argus confirms a finding in one of the seeded files.
-
-Work ships in increments, each one branch, one pull request with its verification pasted in the body, and one squash-merge.
-Since the review workflow landed, every pull request is reviewed by Argus itself.
+What those tests cover is described under [How it was built](#how-it-was-built).
 
 ## License
 
