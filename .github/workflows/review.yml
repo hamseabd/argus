@@ -17,6 +17,11 @@ name: argus-review
 # the pull_request event because GitHub gives them no secrets and a
 # read-only token; a maintainer can still review one on demand.
 #
+# Dependabot's pull requests are skipped for the same reason: GitHub gives
+# them no secrets either, so the token mint fails before the review runs and
+# the red check says nothing about the change. A maintainer can review one on
+# demand.
+#
 # Identity: the review is posted with an installation token for the Argus
 # GitHub App, minted just before the review step and revoked when the job
 # ends, so it appears under Argus's own name. The workflow's own token is
@@ -63,7 +68,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.draft == false &&
-       github.event.pull_request.head.repo.full_name == github.repository)
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.user.login != 'dependabot[bot]')
     runs-on: ubuntu-latest
     # A review of a small PR takes about five minutes; a stuck one must not hold
     # the runner (and the quota window) for the six-hour default.
