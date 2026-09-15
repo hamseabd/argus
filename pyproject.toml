@@ -1,7 +1,7 @@
 [project]
 name = "argus"
 version = "0.1.0"
-description = "Code-review agent on the Claude Agent SDK: parallel specialist subagents, self-verified findings, inline GitHub reviews"
+description = "Multi-agent code-review harness on the Claude Agent SDK: orchestrated specialist subagents, independently verified findings, inline GitHub reviews"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
