@@ -47,6 +47,25 @@ def test_review_skips_drafts_and_fork_pull_requests() -> None:
     assert "head.repo.full_name == github.repository" in condition
 
 
+def test_review_skips_pull_requests_opened_by_dependabot() -> None:
+    """Dependabot's pull requests get no secrets, so the token mint fails, not the review.
+
+    Skipping them keeps a dependency bump from showing a red check that says
+    nothing about the change. A maintainer can still review one on demand.
+
+    The clause has to sit inside the pull_request group: joined at the top
+    level with `||` it would let every draft and every fork through, which is
+    why this asserts where the clause is and not just that it is there.
+    """
+    condition = load("review.yml")["jobs"]["review"]["if"]
+    group = condition[condition.index("(") + 1 : condition.rindex(")")]
+
+    assert "pull_request.user.login != 'dependabot[bot]'" in group
+    assert "||" not in group  # every clause in the group is an AND
+    assert "draft == false" in group
+    assert "head.repo.full_name == github.repository" in group
+
+
 def test_review_can_be_called_from_another_repository() -> None:
     call = load("review.yml")["on"]["workflow_call"]
 
