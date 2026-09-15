@@ -158,7 +158,7 @@ The app needs `Pull requests: Read and write` and `Contents: Read-only`, and mus
 #### Reviewing another repository
 
 The same file is a reusable workflow, so any repository can have Argus review its pull requests with a small caller workflow, the same three secrets, and the Argus app installed on it.
-The caller below is the one [apex-agent](https://github.com/hamseabd/apex-agent/pull/7) runs; Argus reviewed its first draft there and asked for the commit pin and the explicit draft and fork guard:
+The caller below is [apex-agent](https://github.com/hamseabd/apex-agent/pull/7)'s, with the pin updated to the current `v1`; Argus reviewed its first draft there and asked for the commit pin and the explicit draft and fork guard:
 
 ```yaml
 # .github/workflows/argus-review.yml
@@ -173,7 +173,7 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
-    uses: hamseabd/argus/.github/workflows/review.yml@339b911e698fce458fdbf33709db5f6e27d76523 # v1
+    uses: hamseabd/argus/.github/workflows/review.yml@499078048d2e6d46f557d61f5bbae4e14f9af9ce # v1
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ARGUS_APP_ID: ${{ secrets.ARGUS_APP_ID }}

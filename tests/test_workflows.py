@@ -1,4 +1,4 @@
-"""The dogfood workflow's shape, checked mechanically so a careless edit cannot widen it."""
+"""The workflow and Dependabot shapes, checked mechanically so a careless edit cannot widen them."""
 
 from pathlib import Path
 
@@ -123,3 +123,31 @@ def test_the_review_workflow_pins_every_action_by_commit() -> None:
         if uses:
             sha = uses.split("@", 1)[1]
             assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha), uses
+
+
+def dependabot() -> dict:
+    return yaml.safe_load((WORKFLOWS.parent / "dependabot.yml").read_text())
+
+
+def test_dependabot_uses_the_current_config_schema() -> None:
+    assert dependabot()["version"] == 2
+
+
+def test_dependabot_watches_the_pinned_actions_and_the_python_dependencies() -> None:
+    ecosystems = {update["package-ecosystem"] for update in dependabot()["updates"]}
+
+    assert ecosystems == {"github-actions", "uv"}
+
+
+def test_every_dependabot_update_checks_the_repository_root_weekly() -> None:
+    for update in dependabot()["updates"]:
+        assert update["directory"] == "/", update["package-ecosystem"]
+        assert update["schedule"]["interval"] == "weekly", update["package-ecosystem"]
+
+
+def test_dependabot_batches_minor_and_patch_into_one_pull_request_per_ecosystem() -> None:
+    for update in dependabot()["updates"]:
+        (group,) = update["groups"].values()  # one group, so one PR, majors still separate
+
+        assert group["patterns"] == ["*"], update["package-ecosystem"]
+        assert set(group["update-types"]) == {"minor", "patch"}, update["package-ecosystem"]
