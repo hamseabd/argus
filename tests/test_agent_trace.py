@@ -419,3 +419,35 @@ def test_a_broken_recorder_never_raises_out_of_a_public_method(monkeypatch) -> N
         "on_tool_denied",
         "on_subagent_start",
     }
+
+
+def test_a_background_specialist_span_lasts_until_the_specialist_stops(spans) -> None:
+    """The Agent call can return before the specialist runs; its span must not."""
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(clock=Clock())
+        rec.on_tool_start(pre("Agent", "tu-a", subagent_type="security"))
+        rec.on_tool_end(pre("Agent", "tu-a"))  # returned at once: backgrounded
+        rec.on_subagent_start({"agent_id": "ag-1", "agent_type": "security"})
+        rec.on_tool_start(pre("Read", "tu-r", "ag-1", file_path="a.py"))
+        rec.on_tool_end(pre("Read", "tu-r", "ag-1"))
+        rec.on_subagent_stop({"agent_id": "ag-1", "agent_type": "security"})
+        rec.close()
+
+    finished = spans.get_finished_spans()
+    (agent,) = named(finished, "security")
+    (read,) = named(finished, "Read")
+    assert agent.end_time >= read.end_time
+    assert agent.status.status_code != StatusCode.ERROR
+
+
+def test_a_foreground_specialist_span_ends_with_its_agent_call(spans) -> None:
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(clock=Clock())
+        rec.on_tool_start(pre("Agent", "tu-a", subagent_type="quality"))
+        rec.on_subagent_start({"agent_id": "ag-1", "agent_type": "quality"})
+        rec.on_subagent_stop({"agent_id": "ag-1", "agent_type": "quality"})
+        rec.on_tool_end(pre("Agent", "tu-a"))
+        rec.close()
+
+    (agent,) = named(spans.get_finished_spans(), "quality")
+    assert agent.status.status_code != StatusCode.ERROR

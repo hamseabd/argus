@@ -110,8 +110,18 @@ def stage_attributes(metrics: StageMetrics) -> dict[str, AttributeValue]:
 
 
 def record_error(span: Span, exc: BaseException) -> None:
-    """ERROR status with a redacted one-line reason, and what the failure cost when it was paid."""
-    span.set_status(Status(StatusCode.ERROR, redact(f"{type(exc).__name__}: {exc}", ERROR_CHARS)))
+    """ERROR status with a redacted one-line reason, and what the failure cost when it was paid.
+
+    LangSmith ignores the OTel status and marks a run failed only from an
+    exception event, so one is added too: type and redacted message, never
+    the stack trace.
+    """
+    reason = redact(f"{type(exc).__name__}: {exc}", ERROR_CHARS)
+    span.set_status(Status(StatusCode.ERROR, reason))
+    span.add_event(
+        "exception",
+        {"exception.type": type(exc).__name__, "exception.message": redact(str(exc), ERROR_CHARS)},
+    )
     cost = getattr(exc, "cost_usd", None)
     if isinstance(cost, int | float):
         span.set_attributes(meta(cost_usd=float(cost)))

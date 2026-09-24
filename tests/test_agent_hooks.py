@@ -256,6 +256,7 @@ def test_build_hooks_registers_the_expected_events_and_matchers() -> None:
     assert [m.matcher for m in hooks["PreToolUse"]] == [
         DENIED_TOOL_MATCHER,
         READ_TOOL_MATCHER,
+        STRUCTURED_OUTPUT_TOOL,
         None,
     ]
     assert hooks["PostToolUse"][0].matcher is None
@@ -404,3 +405,79 @@ def test_a_denial_still_comes_back_even_if_the_recorder_is_broken(
     specific2 = past_budget["hookSpecificOutput"]
     assert specific2["permissionDecision"] == "deny"
     assert "specialists" in specific2["permissionDecisionReason"]
+
+
+def test_the_lead_cannot_answer_while_a_specialist_is_still_running() -> None:
+    state = HookState()
+    hooks = build_hooks(state)
+    ctx = {"signal": None}
+    start = hooks["SubagentStart"][0].hooks[0]
+    stop = hooks["SubagentStop"][0].hooks[0]
+    answer = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": STRUCTURED_OUTPUT_TOOL,
+        "tool_use_id": "so-1",
+        "tool_input": {},
+    }
+
+    def pre_tool(data: dict) -> list[dict]:
+        return [
+            asyncio.run(m.hooks[0](data, None, ctx))
+            for m in hooks["PreToolUse"]
+            if m.matcher is None or re.fullmatch(m.matcher, data["tool_name"])
+        ]
+
+    for agent_id, agent_type in (("a-1", "correctness"), ("a-2", "security")):
+        asyncio.run(
+            start(
+                {
+                    "hook_event_name": "SubagentStart",
+                    "agent_id": agent_id,
+                    "agent_type": agent_type,
+                },
+                None,
+                ctx,
+            )
+        )
+    asyncio.run(
+        stop(
+            {"hook_event_name": "SubagentStop", "agent_id": "a-1", "agent_type": "correctness"},
+            None,
+            ctx,
+        )
+    )
+
+    denied = [o for o in pre_tool(answer) if o]
+    assert len(denied) == 1
+    specific = denied[0]["hookSpecificOutput"]
+    assert specific["permissionDecision"] == "deny"
+    assert "security" in specific["permissionDecisionReason"]
+    assert "correctness" not in specific["permissionDecisionReason"]
+
+    asyncio.run(
+        stop(
+            {"hook_event_name": "SubagentStop", "agent_id": "a-2", "agent_type": "security"},
+            None,
+            ctx,
+        )
+    )
+    assert [o for o in pre_tool(answer) if o] == []
+
+
+def test_the_answer_is_never_held_when_no_specialist_ran() -> None:
+    state = HookState()
+    hooks = build_hooks(state)
+    answer = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": STRUCTURED_OUTPUT_TOOL,
+        "tool_use_id": "so-1",
+        "tool_input": {},
+    }
+
+    outs = [
+        asyncio.run(m.hooks[0](answer, None, {"signal": None}))
+        for m in hooks["PreToolUse"]
+        if m.matcher is None or re.fullmatch(m.matcher, STRUCTURED_OUTPUT_TOOL)
+    ]
+
+    assert all(o == {} for o in outs)

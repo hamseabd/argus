@@ -37,6 +37,9 @@ def specialist_agents(settings: Settings) -> dict[str, AgentDefinition]:
             model=settings.specialist_model,
             effort=settings.specialist_effort,
             maxTurns=settings.specialist_max_turns,
+            # Foreground: the lead's Agent call returns with the findings, so it
+            # cannot answer while a specialist is still running.
+            background=False,
         )
         for name in SPECIALISTS
     }

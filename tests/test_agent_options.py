@@ -61,6 +61,7 @@ def test_specialists_are_read_only_sonnet_agents() -> None:
         assert agent.model == "claude-sonnet-5"
         assert agent.effort == "medium"
         assert agent.maxTurns == 25
+        assert agent.background is False  # the lead's Agent call returns only when it is done
         assert agent.tools == ["Read", "Grep", "Glob", GIT_HISTORY_TOOL_NAME]
         assert "Agent" not in agent.tools
         assert name in agent.description

@@ -80,6 +80,9 @@ class HookState:
     """Reads the main thread may make before it must answer; None means no limit."""
     lead_reads: int = 0
     reads_denied: int = 0
+    running: dict[str, str] = field(default_factory=dict)
+    """Subagents started and not yet stopped: agent_id to agent type."""
+    answers_held: int = 0
     clock: Callable[[], float] = time.monotonic
     recorder: "TraceRecorder | None" = None
     """Builds the query's spans; attached by the runner for the length of one query."""
@@ -105,6 +108,39 @@ def deny_mutating_tools(state: HookState) -> Hook:
         if state.recorder is not None:
             state.recorder.on_tool_denied(data, reason)
         get_logger().warning("tool_denied", tool=name, input=summarize(data.get("tool_input")))
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }
+
+    return hook
+
+
+def await_specialists(state: HookState) -> Hook:
+    """Hold the lead's answer until every specialist it started has returned.
+
+    The CLI can run a subagent in the background, so the lead's Agent call may
+    return before the specialist has reported. An answer submitted then misses
+    that specialist's findings, and its late report starts more turns that end
+    in plain text, which fails the run. The answer is refused, naming who is
+    still running, until the last one stops.
+    """
+
+    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+        if data.get("agent_id") or not state.running:
+            return {}
+        waiting = sorted(set(state.running.values()))
+        state.answers_held += 1
+        reason = (
+            f"Still running: {', '.join(waiting)}. Wait for their findings, "
+            "merge them with the others, then answer with the Review."
+        )
+        get_logger().warning("answer_held", waiting=waiting)
+        if state.recorder is not None:
+            state.recorder.on_tool_denied(data, reason)
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -195,6 +231,8 @@ def on_subagent_start(state: HookState) -> Hook:
     async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
         state.subagents_started += 1
         state.agent(data).started_at = state.clock()
+        if data.get("agent_id"):
+            state.running[str(data["agent_id"])] = str(data.get("agent_type") or "agent")
         get_logger().info("subagent_start", agent=data.get("agent_type"), id=data.get("agent_id"))
         if state.recorder is not None:
             state.recorder.on_subagent_start(data)
@@ -206,6 +244,7 @@ def on_subagent_start(state: HookState) -> Hook:
 def on_subagent_stop(state: HookState) -> Hook:
     async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
         state.subagents_stopped += 1
+        state.running.pop(str(data.get("agent_id")), None)
         counters = state.agent(data)
         if counters.started_at is not None:
             counters.duration_ms = round((state.clock() - counters.started_at) * 1000)
@@ -216,6 +255,8 @@ def on_subagent_stop(state: HookState) -> Hook:
             duration_ms=counters.duration_ms,
             tool_calls=counters.tool_calls,
         )
+        if state.recorder is not None:
+            state.recorder.on_subagent_stop(data)
         return {}
 
     return hook
@@ -226,6 +267,7 @@ def build_hooks(state: HookState) -> dict[HookEvent, list[HookMatcher]]:
         "PreToolUse": [
             HookMatcher(matcher=DENIED_TOOL_MATCHER, hooks=[deny_mutating_tools(state)]),
             HookMatcher(matcher=READ_TOOL_MATCHER, hooks=[limit_lead_reading(state)]),
+            HookMatcher(matcher=STRUCTURED_OUTPUT_TOOL, hooks=[await_specialists(state)]),
             HookMatcher(hooks=[observe_tool_start(state)]),
         ],
         "PostToolUse": [HookMatcher(hooks=[audit_tool_call(state)])],
