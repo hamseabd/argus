@@ -19,10 +19,12 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 
 from opentelemetry import trace
+from opentelemetry.context import Context
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk import trace as sdk_trace
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 from opentelemetry.trace import Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 
@@ -31,6 +33,7 @@ from argus.domain.models import StageMetrics
 from argus.telemetry import get_logger
 
 ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT"
+TRACER_NAME = "argus"
 KIND = "langsmith.span.kind"
 NAME = "langsmith.trace.name"
 METADATA = "langsmith.metadata."
@@ -46,7 +49,7 @@ token it runs on, and the app installation token it posts with.
 
 
 def tracer() -> trace.Tracer:
-    return trace.get_tracer("argus", __version__)
+    return trace.get_tracer(TRACER_NAME, __version__)
 
 
 def redact(text: str, limit: int = MAX_ATTRIBUTE_CHARS) -> str:
@@ -125,12 +128,18 @@ def span(
             raise
 
 
-def build_provider(environ: Mapping[str, str] = os.environ) -> TracerProvider | None:
+def build_provider(
+    environ: Mapping[str, str] = os.environ, *, exporter: SpanExporter | None = None
+) -> TracerProvider | None:
+    """The provider for a traced run, or None when no endpoint is set.
+
+    exporter defaults to OTLP over HTTP, configured from the OTEL_* variables.
+    """
     if not environ.get(ENDPOINT_ENV, "").strip():
         return None
     resource = Resource.create({"service.name": "argus", "service.version": __version__})
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    provider.add_span_processor(_ArgusOnly(BatchSpanProcessor(exporter or OTLPSpanExporter())))
     return provider
 
 
@@ -156,6 +165,32 @@ def session(environ: Mapping[str, str] = os.environ) -> Iterator[bool]:
         provider.shutdown()
         otel_logger.removeHandler(bridge)
         otel_logger.propagate = True
+
+
+class _ArgusOnly(SpanProcessor):
+    """Export only the spans Argus builds.
+
+    Libraries in the process instrument themselves once a provider is
+    installed (the mcp package emits initialize, tools/list, and its own tool
+    spans), which would land in the review's trace unredacted.
+    """
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self._inner = inner
+
+    def on_start(self, span: sdk_trace.Span, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        scope = span.instrumentation_scope
+        if scope is not None and scope.name == TRACER_NAME:
+            self._inner.on_end(span)
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
 
 
 class _StructlogBridge(logging.Handler):

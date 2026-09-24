@@ -4,6 +4,7 @@ import logging
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
 from argus import telemetry, tracing
@@ -23,6 +24,24 @@ def test_tracing_is_on_with_an_endpoint_and_names_the_service() -> None:
         assert provider.resource.attributes["service.name"] == "argus"
     finally:
         provider.shutdown()
+
+
+def test_only_argus_spans_are_exported() -> None:
+    """The mcp package instruments itself; its spans would land in our trace."""
+    exported = InMemorySpanExporter()
+    provider = tracing.build_provider(
+        {tracing.ENDPOINT_ENV: "http://127.0.0.1:9"}, exporter=exported
+    )
+    try:
+        with provider.get_tracer("mcp").start_as_current_span("tools/list"):
+            pass
+        with provider.get_tracer(tracing.TRACER_NAME).start_as_current_span("argus.review"):
+            pass
+        provider.force_flush()
+    finally:
+        provider.shutdown()
+
+    assert [s.name for s in exported.get_finished_spans()] == ["argus.review"]
 
 
 def test_session_without_an_endpoint_installs_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
