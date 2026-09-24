@@ -24,6 +24,7 @@ from argus.domain.models import (
     Verdict,
 )
 from argus.telemetry import bind_run, get_logger, new_run_id
+from argus.tracing import meta, record_error, redact, span, stage_attributes
 
 DEFAULT_VERIFY_CONCURRENCY = 4
 PAID_ERRORS = (AgentRunError, ReviewProtocolError)
@@ -64,10 +65,40 @@ async def run_review(
 
     Pass run_id when the caller already bound one for its own log events;
     contextvars bound inside this coroutine do not reach the caller's context.
+    The whole run is one trace: argus.run, with a span per stage under it.
     """
+    run_id = run_id or new_run_id()
+    attributes = meta(
+        run_id=run_id,
+        source=context.source,
+        pr=context.pr.number if context.pr else None,
+        head_sha=context.pr.head_sha if context.pr else None,
+        verify=verify,
+    )
+    with span("argus.run", "chain", attributes=attributes) as run_span:
+        result = await _run_review(context, agent, verify, verify_concurrency, run_id)
+        findings = result.review.findings
+        run_span.set_attributes(
+            meta(
+                total_cost_usd=result.total_cost_usd,
+                confirmed=sum(f.status == "confirmed" for f in findings),
+                unverified=sum(f.status == "unverified" for f in findings),
+                rejected=sum(f.status == "rejected" for f in findings),
+            )
+        )
+        return result
+
+
+async def _run_review(
+    context: ReviewContext,
+    agent: ReviewAgent,
+    verify: bool,
+    verify_concurrency: int,
+    run_id: str,
+) -> ReviewResult:
     log = get_logger()
     started = time.monotonic()
-    bind_run(run_id=run_id or new_run_id())
+    bind_run(run_id=run_id)
     log.info(
         "run_start",
         source=context.source,
@@ -76,7 +107,9 @@ async def run_review(
         pr=context.pr.number if context.pr else None,
         verify=verify,
     )
-    reviewed = await agent.review(context)
+    with span("argus.review", "chain") as stage:
+        reviewed = await agent.review(context)
+        stage.set_attributes(stage_attributes(reviewed.metrics))
     review = reviewed.value
     metrics = [reviewed.metrics]
     verdicts: list[Verdict] = []
@@ -130,13 +163,30 @@ async def _verify_all(
 
     async def one(finding: Finding) -> StageOutcome[Verdict] | VerifyFailure:
         async with semaphore:
-            try:
-                return await agent.verify(context, finding, sections.get(finding.file, ""))
-            except ArgusError as exc:
-                cost = float(exc.cost_usd) if isinstance(exc, PAID_ERRORS) else 0.0
-                get_logger().warning(
-                    "verify_failed", finding=finding.id, error=str(exc), cost_usd=cost
+            attributes = meta(
+                finding_id=finding.id,
+                severity=finding.severity,
+                category=finding.category,
+                title=redact(finding.title),
+            )
+            with span(
+                "argus.verify", "chain", display=f"argus.verify {finding.id}", attributes=attributes
+            ) as stage:
+                try:
+                    outcome = await agent.verify(context, finding, sections.get(finding.file, ""))
+                except ArgusError as exc:
+                    record_error(stage, exc)
+                    cost = float(exc.cost_usd) if isinstance(exc, PAID_ERRORS) else 0.0
+                    get_logger().warning(
+                        "verify_failed", finding=finding.id, error=str(exc), cost_usd=cost
+                    )
+                    return VerifyFailure(cost)
+                stage.set_attributes(
+                    {
+                        **stage_attributes(outcome.metrics),
+                        **meta(verdict=outcome.value.verdict, confidence=outcome.value.confidence),
+                    }
                 )
-                return VerifyFailure(cost)
+                return outcome
 
     return await asyncio.gather(*(one(f) for f in findings))

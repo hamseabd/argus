@@ -3,6 +3,10 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+from opentelemetry import trace as otel_trace
+from opentelemetry.trace import StatusCode
+
 from argus import telemetry
 from argus.domain.errors import AgentRunError, ReviewProtocolError
 from argus.domain.models import Finding, Review, ReviewContext, StageMetrics, Verdict
@@ -196,3 +200,92 @@ def test_an_integer_cost_on_a_failed_verification_is_handled(tmp_path: Path) -> 
     result = asyncio.run(run_review(context(tmp_path), agent))
 
     assert result.total_cost_usd == 1.0
+
+
+def by_name(finished, name: str) -> list:
+    return [s for s in finished if s.name == name]
+
+
+def test_a_run_is_one_trace_with_a_review_and_a_span_per_verification(
+    tmp_path: Path, spans
+) -> None:
+    review = Review(summary="s", files_reviewed=["f1.py"], findings=[finding(1), finding(2)])
+    agent = FakeAgent(
+        review,
+        {
+            "correctness-1": "confirmed",
+            "correctness-2": ReviewProtocolError("no verdict", cost_usd=0.05),
+        },
+    )
+
+    asyncio.run(run_review(context(tmp_path), agent, run_id="r1"))
+
+    finished = spans.get_finished_spans()
+    (run,) = by_name(finished, "argus.run")
+    (rev,) = by_name(finished, "argus.review")
+    verifies = by_name(finished, "argus.verify")
+    assert {s.context.trace_id for s in finished} == {run.context.trace_id}
+    assert run.parent is None
+    assert rev.parent.span_id == run.context.span_id
+    assert len(verifies) == 2
+    assert all(v.parent.span_id == run.context.span_id for v in verifies)
+
+    assert run.attributes["langsmith.metadata.run_id"] == "r1"
+    assert run.attributes["langsmith.metadata.source"] == "local"
+    assert run.attributes["langsmith.metadata.total_cost_usd"] == 1.15
+    assert run.attributes["langsmith.metadata.confirmed"] == 1
+    assert run.attributes["langsmith.metadata.unverified"] == 1
+    assert rev.attributes["langsmith.metadata.cost_usd"] == 1.0
+
+    ok = next(
+        v for v in verifies if v.attributes["langsmith.metadata.finding_id"] == "correctness-1"
+    )
+    assert ok.attributes["langsmith.trace.name"] == "argus.verify correctness-1"
+    assert ok.attributes["langsmith.metadata.verdict"] == "confirmed"
+    assert ok.attributes["langsmith.metadata.severity"] == "high"
+    assert ok.attributes["langsmith.metadata.title"] == "t1"
+    failed = next(
+        v for v in verifies if v.attributes["langsmith.metadata.finding_id"] == "correctness-2"
+    )
+    assert failed.status.status_code == StatusCode.ERROR
+    assert failed.attributes["langsmith.metadata.cost_usd"] == 0.05
+
+
+def test_each_verification_runs_inside_its_own_span(tmp_path: Path, spans) -> None:
+    seen: dict[str, int] = {}
+
+    class SpanSpy(FakeAgent):
+        async def verify(self, context, finding, diff_section):
+            seen[finding.id] = otel_trace.get_current_span().get_span_context().span_id
+            return await super().verify(context, finding, diff_section)
+
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1), finding(2), finding(3)])
+    agent = SpanSpy(review, {f"correctness-{i}": "confirmed" for i in (1, 2, 3)})
+
+    asyncio.run(run_review(context(tmp_path), agent, verify_concurrency=3))
+
+    verifies = {
+        s.attributes["langsmith.metadata.finding_id"]: s.context.span_id
+        for s in by_name(spans.get_finished_spans(), "argus.verify")
+    }
+    assert seen == verifies
+
+
+def test_a_failed_review_stage_marks_the_run_and_the_stage(tmp_path: Path, spans) -> None:
+    class Broken(FakeAgent):
+        async def review(self, context):
+            raise AgentRunError("error_max_budget_usd", 3.0)
+
+    with pytest.raises(AgentRunError):
+        asyncio.run(
+            run_review(
+                context(tmp_path), Broken(Review(summary="s", files_reviewed=[], findings=[]), {})
+            )
+        )
+
+    finished = spans.get_finished_spans()
+    (run,) = by_name(finished, "argus.run")
+    (rev,) = by_name(finished, "argus.review")
+    assert rev.status.status_code == StatusCode.ERROR
+    assert rev.attributes["langsmith.metadata.cost_usd"] == 3.0
+    assert run.status.status_code == StatusCode.ERROR
