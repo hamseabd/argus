@@ -6,8 +6,12 @@ into a typed error: a non-success result subtype, an API error hidden
 under a success subtype, a success with no structured output, a stream
 that ends without a result, and an exception raised by the SDK itself
 (which is how a budget overrun surfaces).
+
+It also attaches a TraceRecorder to the hook state for the length of the
+query, so the stream and the hooks build one span tree.
 """
 
+import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -20,9 +24,11 @@ from claude_agent_sdk import (
     ResultMessage,
     query,
 )
+from opentelemetry import trace
 
 from argus.agent.hooks import HookState
 from argus.agent.ledger import AgentLedger
+from argus.agent.trace import TraceRecorder
 from argus.domain.errors import AgentRunError, ReviewProtocolError
 from argus.domain.models import StageMetrics
 from argus.telemetry import bind_run, get_logger
@@ -49,8 +55,9 @@ class Runner(Protocol):
 class SdkRunner:
     """Runs queries through claude_agent_sdk.query; the query function is injectable."""
 
-    def __init__(self, query_fn: QueryFn = query) -> None:
+    def __init__(self, query_fn: QueryFn = query, *, trace_content: bool = False) -> None:
         self._query = query_fn
+        self._trace_content = trace_content
 
     async def run(
         self, prompt: str, options: ClaudeAgentOptions, *, stage: str, state: HookState
@@ -60,32 +67,42 @@ class SdkRunner:
         log.info("stage_start", stage=stage, model=model)
         result: ResultMessage | None = None
         ledger = AgentLedger()
+        recorder = TraceRecorder(content=self._trace_content)
+        state.recorder = recorder
+        stage_span = trace.get_current_span()
+        if self._trace_content:
+            stage_span.set_attribute("input.value", redact(prompt))
         try:
-            # The result message is always last; do not break out of the loop early,
-            # closing the generator before it finishes raises from its aclose().
-            async for message in self._query(prompt=prompt, options=options):
-                if isinstance(message, ResultMessage):
-                    result = message
-                    bind_run(session_id=message.session_id)
-                elif isinstance(message, AssistantMessage):
-                    ledger.record(message)
-                elif isinstance(message, RateLimitEvent):
-                    info = message.rate_limit_info
-                    log.warning(
-                        "rate_limited",
-                        stage=stage,
-                        status=info.status,
-                        rate_limit_type=info.rate_limit_type,
-                        utilization=info.utilization,
-                        resets_at=info.resets_at,
-                    )
-        except ClaudeSDKError as exc:
-            raise AgentRunError(
-                subtype=f"sdk_error:{type(exc).__name__}",
-                cost_usd=result.total_cost_usd or 0.0 if result else 0.0,
-                session_id=result.session_id if result else None,
-                detail=_why(exc),
-            ) from exc
+            try:
+                # The result message is always last; do not break out of the loop early,
+                # closing the generator before it finishes raises from its aclose().
+                async for message in self._query(prompt=prompt, options=options):
+                    if isinstance(message, ResultMessage):
+                        result = message
+                        bind_run(session_id=message.session_id)
+                    elif isinstance(message, AssistantMessage):
+                        ledger.record(message)
+                        recorder.on_assistant(message)
+                    elif isinstance(message, RateLimitEvent):
+                        info = message.rate_limit_info
+                        log.warning(
+                            "rate_limited",
+                            stage=stage,
+                            status=info.status,
+                            rate_limit_type=info.rate_limit_type,
+                            utilization=info.utilization,
+                            resets_at=info.resets_at,
+                        )
+            except ClaudeSDKError as exc:
+                raise AgentRunError(
+                    subtype=f"sdk_error:{type(exc).__name__}",
+                    cost_usd=result.total_cost_usd or 0.0 if result else 0.0,
+                    session_id=result.session_id if result else None,
+                    detail=_why(exc),
+                ) from exc
+        finally:
+            recorder.close()
+            state.recorder = None
         if result is None:
             raise ReviewProtocolError(f"{stage}: the query ended without a result message")
         cost = result.total_cost_usd or 0.0
@@ -99,6 +116,10 @@ class SdkRunner:
                 f"{stage}: the query succeeded but returned no structured output",
                 cost_usd=cost,
                 session_id=result.session_id,
+            )
+        if self._trace_content:
+            stage_span.set_attribute(
+                "output.value", redact(json.dumps(result.structured_output, sort_keys=True))
             )
         usage = result.usage or {}
         metrics = StageMetrics(

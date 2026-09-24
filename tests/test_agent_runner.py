@@ -17,10 +17,11 @@ from claude_agent_sdk import (
 )
 
 from argus import telemetry
-from argus.agent.hooks import LEAD_AGENT, AgentCounters, HookState
+from argus.agent.hooks import LEAD_AGENT, AgentCounters, HookState, build_hooks
 from argus.agent.runner import RunResult, SdkRunner
 from argus.domain.errors import AgentRunError, ReviewProtocolError
 from argus.domain.models import AgentMetrics
+from argus.tracing import span
 
 
 def result(**overrides: Any) -> ResultMessage:
@@ -281,3 +282,116 @@ def asyncio_run(coro):
     import asyncio
 
     return asyncio.run(coro)
+
+
+def traced_runner(script, trace_content: bool = False) -> SdkRunner:
+    """A fake query that interleaves stream messages with hook calls, as the CLI does."""
+
+    async def fake_query(*, prompt: str, options: ClaudeAgentOptions):
+        for step in script:
+            if isinstance(step, tuple):
+                event, index, data = step
+                await options.hooks[event][index].hooks[0](data, None, {"signal": None})
+            elif isinstance(step, Exception):
+                raise step
+            else:
+                yield step
+
+    return SdkRunner(query_fn=fake_query, trace_content=trace_content)
+
+
+def hooked_options(state: HookState) -> ClaudeAgentOptions:
+    return ClaudeAgentOptions(model="claude-opus-5", hooks=build_hooks(state))
+
+
+def test_a_query_becomes_a_span_tree_under_the_current_stage(spans) -> None:
+    state = HookState()
+
+    def lead() -> dict:
+        return {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Agent",
+            "tool_use_id": "tu-a",
+            "tool_input": {"subagent_type": "security"},
+        }
+
+    sub = {"agent_id": "ag-1", "agent_type": "security"}
+    read = {"tool_name": "Read", "tool_use_id": "tu-r", "tool_input": {"file_path": "a.py"}, **sub}
+    script = [
+        AssistantMessage(
+            content=[ToolUseBlock(id="tu-a", name="Agent", input={"subagent_type": "security"})],
+            model="claude-opus-5",
+            message_id="m1",
+            usage={"output_tokens": 5},
+        ),
+        ("PreToolUse", -1, lead()),
+        ("SubagentStart", 0, {"hook_event_name": "SubagentStart", **sub}),
+        AssistantMessage(
+            content=[TextBlock("reading")],
+            model="claude-sonnet-5",
+            parent_tool_use_id="tu-a",
+            message_id="m2",
+            usage={"output_tokens": 7},
+        ),
+        ("PreToolUse", -1, {"hook_event_name": "PreToolUse", **read}),
+        ("PostToolUse", 0, {"hook_event_name": "PostToolUse", **read}),
+        ("PostToolUse", 0, {**lead(), "hook_event_name": "PostToolUse"}),
+        result(),
+    ]
+
+    with span("argus.review", "chain") as stage:
+        asyncio_run(
+            traced_runner(script).run("p", hooked_options(state), stage="review", state=state)
+        )
+
+    finished = spans.get_finished_spans()
+    names = {s.name: s for s in finished}
+    assert names["security"].parent.span_id == stage.get_span_context().span_id
+    assert names["Read"].parent.span_id == names["security"].context.span_id
+    assert sum(s.name == "llm" for s in finished) == 2
+    assert state.recorder is None
+
+
+def test_a_failed_query_closes_its_spans_and_detaches_the_recorder(spans) -> None:
+    state = HookState()
+    read = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "tool_use_id": "tu-r",
+        "tool_input": {},
+    }
+    script = [("PreToolUse", -1, read), CLIConnectionError("gone")]
+
+    with span("argus.review", "chain"), pytest.raises(AgentRunError):
+        asyncio_run(
+            traced_runner(script).run("p", hooked_options(state), stage="review", state=state)
+        )
+
+    (read_span,) = [s for s in spans.get_finished_spans() if s.name == "Read"]
+    assert read_span.status.status_code.name == "ERROR"
+    assert state.recorder is None
+
+
+def test_content_mode_puts_the_prompt_and_output_on_the_stage(spans) -> None:
+    state = HookState()
+    with span("argus.review", "chain"):
+        asyncio_run(
+            traced_runner([result()], trace_content=True).run(
+                "review ghp_abcdefghijkl1234", hooked_options(state), stage="review", state=state
+            )
+        )
+
+    (stage,) = [s for s in spans.get_finished_spans() if s.name == "argus.review"]
+    assert "[redacted]" in stage.attributes["input.value"]
+    assert json.loads(stage.attributes["output.value"])["verdict"] == "confirmed"
+
+
+def test_no_content_on_the_stage_by_default(spans) -> None:
+    state = HookState()
+    with span("argus.review", "chain"):
+        asyncio_run(
+            traced_runner([result()]).run("p", hooked_options(state), stage="review", state=state)
+        )
+
+    (stage,) = [s for s in spans.get_finished_spans() if s.name == "argus.review"]
+    assert "input.value" not in stage.attributes

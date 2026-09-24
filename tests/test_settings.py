@@ -52,3 +52,9 @@ def test_invalid_values_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ARGUS_LEAD_EFFORT", "extreme")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_trace_content_is_off_by_default_and_env_overridable(monkeypatch) -> None:
+    assert Settings(_env_file=None).trace_content is False
+    monkeypatch.setenv("ARGUS_TRACE_CONTENT", "true")
+    assert Settings(_env_file=None).trace_content is True

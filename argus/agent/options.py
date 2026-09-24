@@ -85,6 +85,9 @@ def _common(context: ReviewContext, state: HookState) -> dict:
         "strict_mcp_config": True,
         "setting_sources": [],
         "stderr": _cli_stderr,
+        # Argus builds its own spans (argus.tracing); the native ones carry the
+        # account's identity and would duplicate the tree.
+        "env": {"CLAUDE_CODE_ENABLE_TELEMETRY": "0"},
     }
 
 

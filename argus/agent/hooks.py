@@ -8,19 +8,25 @@ can tell whether the lead delegated as instructed, count rejected
 structured outputs so a review that only validated after several attempts
 is visible in the metrics, and keep per-agent tallies, since inside a
 subagent the tool hooks carry that subagent's id and type.
+
+When a TraceRecorder is attached, the same hooks feed it the start, end,
+and denial of every tool call.
 """
 
 import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from claude_agent_sdk import HookContext, HookMatcher
 from claude_agent_sdk.types import HookEvent
 
 from argus.agent.tools import GIT_HISTORY_TOOL_NAME
 from argus.telemetry import get_logger
+
+if TYPE_CHECKING:
+    from argus.agent.trace import TraceRecorder
 
 DENIED_TOOLS = frozenset(
     {"Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "WebFetch", "WebSearch"}
@@ -75,6 +81,8 @@ class HookState:
     lead_reads: int = 0
     reads_denied: int = 0
     clock: Callable[[], float] = time.monotonic
+    recorder: "TraceRecorder | None" = None
+    """Builds the query's spans; attached by the runner for the length of one query."""
 
     def agent(self, data: dict[str, Any]) -> AgentCounters:
         """The counters for whichever agent a hook input came from."""
@@ -94,6 +102,8 @@ def deny_mutating_tools(state: HookState) -> Hook:
             f"{name} is not available: Argus is a read-only reviewer "
             "and never changes the repository."
         )
+        if state.recorder is not None:
+            state.recorder.on_tool_denied(data, reason)
         get_logger().warning("tool_denied", tool=name, input=_summarize(data.get("tool_input")))
         return {
             "hookSpecificOutput": {
@@ -124,17 +134,29 @@ def limit_lead_reading(state: HookState) -> Hook:
             state.lead_reads += 1
             return {}
         state.reads_denied += 1
+        reason = (
+            f"You have used the {budget} reads a lead gets. The specialists have read "
+            "the change for you: merge what they reported and answer with the Review."
+        )
         get_logger().warning("lead_read_denied", tool=data.get("tool_name"), budget=budget)
+        if state.recorder is not None:
+            state.recorder.on_tool_denied(data, reason)
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    f"You have used the {budget} reads a lead gets. The specialists have read "
-                    "the change for you: merge what they reported and answer with the Review."
-                ),
+                "permissionDecisionReason": reason,
             }
         }
+
+    return hook
+
+
+def observe_tool_start(state: HookState) -> Hook:
+    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+        if state.recorder is not None:
+            state.recorder.on_tool_start(data)
+        return {}
 
     return hook
 
@@ -146,6 +168,8 @@ def audit_tool_call(state: HookState) -> Hook:
         get_logger().info(
             "tool_call", tool=data.get("tool_name"), input=_summarize(data.get("tool_input"))
         )
+        if state.recorder is not None:
+            state.recorder.on_tool_end(data)
         return {}
 
     return hook
@@ -160,6 +184,8 @@ def audit_tool_failure(state: HookState) -> Hook:
         get_logger().warning(
             "tool_failed", tool=data.get("tool_name"), error=_truncate(str(data.get("error", "")))
         )
+        if state.recorder is not None:
+            state.recorder.on_tool_end(data, error=str(data.get("error", "")))
         return {}
 
     return hook
@@ -170,6 +196,8 @@ def on_subagent_start(state: HookState) -> Hook:
         state.subagents_started += 1
         state.agent(data).started_at = state.clock()
         get_logger().info("subagent_start", agent=data.get("agent_type"), id=data.get("agent_id"))
+        if state.recorder is not None:
+            state.recorder.on_subagent_start(data)
         return {}
 
     return hook
@@ -198,6 +226,7 @@ def build_hooks(state: HookState) -> dict[HookEvent, list[HookMatcher]]:
         "PreToolUse": [
             HookMatcher(matcher=DENIED_TOOL_MATCHER, hooks=[deny_mutating_tools(state)]),
             HookMatcher(matcher=READ_TOOL_MATCHER, hooks=[limit_lead_reading(state)]),
+            HookMatcher(hooks=[observe_tool_start(state)]),
         ],
         "PostToolUse": [HookMatcher(hooks=[audit_tool_call(state)])],
         "PostToolUseFailure": [HookMatcher(hooks=[audit_tool_failure(state)])],

@@ -91,3 +91,12 @@ def test_settings_overrides_reach_the_options(tmp_path: Path) -> None:
 
     assert opts.model == "claude-sonnet-5"
     assert opts.max_budget_usd == 1.0
+
+
+def test_native_claude_code_telemetry_is_forced_off(tmp_path: Path) -> None:
+    ctx = context(tmp_path)
+    for options in (
+        lead_options(settings(), ctx, HookState()),
+        verifier_options(settings(), ctx, HookState()),
+    ):
+        assert options.env["CLAUDE_CODE_ENABLE_TELEMETRY"] == "0"

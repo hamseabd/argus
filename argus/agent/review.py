@@ -22,7 +22,7 @@ from argus.telemetry import get_logger
 class SdkReviewAgent:
     def __init__(self, settings: Settings, runner: Runner | None = None) -> None:
         self._settings = settings
-        self._runner = runner or SdkRunner()
+        self._runner = runner or SdkRunner(trace_content=settings.trace_content)
 
     async def review(self, context: ReviewContext) -> StageOutcome[Review]:
         state = HookState(read_budget=self._settings.lead_read_budget)
