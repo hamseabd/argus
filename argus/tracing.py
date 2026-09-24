@@ -40,11 +40,12 @@ METADATA = "langsmith.metadata."
 MAX_ATTRIBUTE_CHARS = 8192
 ERROR_CHARS = 300
 
-_CREDENTIAL = re.compile(r"(sk-ant-|gh[pousr]_|github_pat_)[A-Za-z0-9_\-]{8,}")
+_CREDENTIAL = re.compile(r"(sk-ant-|gh[pousr]_|github_pat_|lsv2_)[A-Za-z0-9_\-]{8,}")
 """Review logs and traces leave the machine; nothing token-shaped goes into one.
 
-Both credentials the review step holds are covered: the Claude subscription
-token it runs on, and the app installation token it posts with.
+All three credentials the review step holds are covered: the Claude
+subscription token it runs on, the app installation token it posts with,
+and the LangSmith key it traces with.
 """
 
 

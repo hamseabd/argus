@@ -106,7 +106,13 @@ def test_session_redacts_credentials_in_the_logged_endpoint(
 
 @pytest.mark.parametrize(
     "secret",
-    ["sk-ant-oat01-abcdefghij", "ghp_abcdefghijkl", "ghs_abcdefghijkl", "github_pat_abcdefghij"],
+    [
+        "sk-ant-oat01-abcdefghij",
+        "ghp_abcdefghijkl",
+        "ghs_abcdefghijkl",
+        "github_pat_abcdefghij",
+        "lsv2_pt_0123456789abcdef_0123456789",
+    ],
 )
 def test_redact_removes_credentials(secret: str) -> None:
     assert secret not in tracing.redact(f"token={secret} rest")

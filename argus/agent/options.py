@@ -86,8 +86,14 @@ def _common(context: ReviewContext, state: HookState) -> dict:
         "setting_sources": [],
         "stderr": _cli_stderr,
         # Argus builds its own spans (argus.tracing); the native ones carry the
-        # account's identity and would duplicate the tree.
-        "env": {"CLAUDE_CODE_ENABLE_TELEMETRY": "0"},
+        # account's identity and would duplicate the tree. The exporter settings
+        # are blanked too: the headers carry the LangSmith key, and the child
+        # process has no use for it.
+        "env": {
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
+            "OTEL_EXPORTER_OTLP_HEADERS": "",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "",
+        },
     }
 
 

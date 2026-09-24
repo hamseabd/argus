@@ -100,3 +100,14 @@ def test_native_claude_code_telemetry_is_forced_off(tmp_path: Path) -> None:
         verifier_options(settings(), ctx, HookState()),
     ):
         assert options.env["CLAUDE_CODE_ENABLE_TELEMETRY"] == "0"
+
+
+def test_the_trace_exporter_settings_never_reach_the_cli(tmp_path: Path) -> None:
+    """The OTLP headers carry the LangSmith key; the Claude Code child has no use for it."""
+    ctx = context(tmp_path)
+    for options in (
+        lead_options(settings(), ctx, HookState()),
+        verifier_options(settings(), ctx, HookState()),
+    ):
+        assert options.env["OTEL_EXPORTER_OTLP_HEADERS"] == ""
+        assert options.env["OTEL_EXPORTER_OTLP_ENDPOINT"] == ""
