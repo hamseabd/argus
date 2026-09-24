@@ -83,6 +83,26 @@ def test_meta_prefixes_keys_and_drops_none() -> None:
     }
 
 
+def test_meta_redacts_string_values_but_leaves_other_types_alone() -> None:
+    attrs = tracing.meta(token="ghp_abcdefghijkl1234", n=3)
+    assert "ghp_abcdefghijkl1234" not in attrs["langsmith.metadata.token"]
+    assert attrs["langsmith.metadata.n"] == 3
+
+
+def test_span_redacts_the_display_name_and_string_attributes(spans) -> None:
+    with tracing.span(
+        "x",
+        "chain",
+        display="d ghp_abcdefghijkl1234",
+        attributes={"input.value": "ghp_abcdefghijkl1234"},
+    ):
+        pass
+
+    (s,) = spans.get_finished_spans()
+    assert "ghp_abcdefghijkl1234" not in s.attributes["langsmith.trace.name"]
+    assert "ghp_abcdefghijkl1234" not in s.attributes["input.value"]
+
+
 def test_stage_attributes_carry_the_stage_metrics() -> None:
     m = StageMetrics(
         stage="review",

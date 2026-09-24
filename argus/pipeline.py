@@ -24,7 +24,7 @@ from argus.domain.models import (
     Verdict,
 )
 from argus.telemetry import bind_run, get_logger, new_run_id
-from argus.tracing import meta, record_error, redact, span, stage_attributes
+from argus.tracing import meta, record_error, span, stage_attributes
 
 DEFAULT_VERIFY_CONCURRENCY = 4
 PAID_ERRORS = (AgentRunError, ReviewProtocolError)
@@ -167,7 +167,7 @@ async def _verify_all(
                 finding_id=finding.id,
                 severity=finding.severity,
                 category=finding.category,
-                title=redact(finding.title),
+                title=finding.title,
             )
             with span(
                 "argus.verify", "chain", display=f"argus.verify {finding.id}", attributes=attributes

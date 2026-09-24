@@ -55,8 +55,16 @@ def redact(text: str, limit: int = MAX_ATTRIBUTE_CHARS) -> str:
 
 
 def meta(**values: object) -> dict[str, AttributeValue]:
-    """Attributes LangSmith would otherwise drop, under its metadata prefix; None is skipped."""
-    return {f"{METADATA}{k}": v for k, v in values.items() if v is not None}  # type: ignore[misc]
+    """Attributes LangSmith would otherwise drop, under its metadata prefix; None is skipped.
+
+    Every string value passes through redact() so no credential-shaped text
+    reaches a span by way of metadata; other types are passed through as-is.
+    """
+    return {
+        f"{METADATA}{k}": redact(v) if isinstance(v, str) else v  # type: ignore[misc]
+        for k, v in values.items()
+        if v is not None
+    }
 
 
 def stage_attributes(metrics: StageMetrics) -> dict[str, AttributeValue]:
@@ -95,9 +103,12 @@ def span(
     attributes: Mapping[str, AttributeValue] | None = None,
 ) -> Iterator[Span]:
     """The current span for a block. Errors are recorded redacted, never as raw exception events."""
-    attrs: dict[str, AttributeValue] = {KIND: kind, **(attributes or {})}
+    attrs: dict[str, AttributeValue] = {
+        KIND: kind,
+        **{k: redact(v) if isinstance(v, str) else v for k, v in (attributes or {}).items()},
+    }
     if display is not None:
-        attrs[NAME] = display
+        attrs[NAME] = redact(display)
     with tracer().start_as_current_span(
         name, attributes=attrs, record_exception=False, set_status_on_exception=False
     ) as current:
