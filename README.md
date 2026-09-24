@@ -203,7 +203,8 @@ jobs:
       ARGUS_APP_PRIVATE_KEY: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
 ```
 
-To trace your reviews, pass `LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}` as well; it is optional.
+Tracing is optional and needs a pin at or after the commit that adds it; the `v1` commit pinned above predates it and does not accept a `LANGSMITH_API_KEY` secret.
+With such a pin, pass `LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}` as well to trace your reviews.
 
 Argus is checked out from this repository at the commit the caller pinned, never from the repository under review, so the trust model is unchanged: the pull request is read, not executed.
 Pin the commit, as above, because the workflow receives a secret and write access and a moving tag is a supply-chain risk; `v1` is a tag this repository moves forward with compatible releases, and the comment records which release the commit is.
