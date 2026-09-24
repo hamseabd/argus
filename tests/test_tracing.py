@@ -67,6 +67,28 @@ def test_session_installs_the_provider_and_flushes_it_on_exit(
     assert shut == [True]
 
 
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [("OTEL_EXPORTER_OTLP_TIMEOUT", "abc"), ("OTEL_EXPORTER_OTLP_COMPRESSION", "zstd")],
+)
+def test_a_malformed_otel_variable_disables_tracing_instead_of_the_run(
+    monkeypatch: pytest.MonkeyPatch, variable: str, value: str
+) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    installed: list[object] = []
+    monkeypatch.setattr(tracing.trace, "set_tracer_provider", installed.append)
+    monkeypatch.setenv(variable, value)
+
+    with tracing.session({tracing.ENDPOINT_ENV: "http://127.0.0.1:9"}) as enabled:
+        assert enabled is False
+    assert installed == []
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    (event,) = [e for e in events if e["event"] == "tracing_disabled"]
+    assert event["level"] == "warning"
+    assert value in event["error"]
+
+
 def test_session_redacts_credentials_in_the_logged_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

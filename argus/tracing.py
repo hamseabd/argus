@@ -148,8 +148,15 @@ def session(environ: Mapping[str, str] = os.environ) -> Iterator[bool]:
     """Install the provider for the block and flush it on the way out; yields whether tracing is on.
 
     A short-lived CLI run would otherwise exit before the batch processor sends.
+    A configuration the exporter rejects (a malformed OTEL_* variable) turns
+    tracing off with a warning; it never stops the review.
     """
-    provider = build_provider(environ)
+    try:
+        provider = build_provider(environ)
+    except Exception as exc:
+        get_logger().warning("tracing_disabled", error=redact(str(exc), ERROR_CHARS))
+        yield False
+        return
     if provider is None:
         yield False
         return
