@@ -199,15 +199,16 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
-    uses: hamseabd/argus/.github/workflows/review.yml@499078048d2e6d46f557d61f5bbae4e14f9af9ce # v1
+    uses: hamseabd/argus/.github/workflows/review.yml@cd404a49fa2fb1d7fe6a33489bd058a816195fd7 # v1
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ARGUS_APP_ID: ${{ secrets.ARGUS_APP_ID }}
       ARGUS_APP_PRIVATE_KEY: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }} # optional: traces each review
 ```
 
-Tracing is optional and needs a pin at or after the commit that adds it; the `v1` commit pinned above predates it and does not accept a `LANGSMITH_API_KEY` secret.
-With such a pin, pass `LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}` as well to trace your reviews.
+`LANGSMITH_API_KEY` is optional; leave the line out, or the secret unset, and nothing is exported.
+A pin from before tracing does not declare that secret, and GitHub rejects a caller that passes it, so update the pin and the secret line together.
 
 Argus is checked out from this repository at the commit the caller pinned, never from the repository under review, so the trust model is unchanged: the pull request is read, not executed.
 Pin the commit, as above, because the workflow receives a secret and write access and a moving tag is a supply-chain risk; `v1` is a tag this repository moves forward with compatible releases, and the comment records which release the commit is.
