@@ -1,6 +1,7 @@
 import io
 import json
 
+import pytest
 from claude_agent_sdk import AssistantMessage, TextBlock, ThinkingBlock
 from opentelemetry.trace import StatusCode
 
@@ -47,6 +48,11 @@ def copy_of(mid: str, content: list, parent: str | None = None, **usage) -> Assi
     )
 
 
+EMAIL = "dev@example.com"
+CLAUDE = "sk-ant-oat01-abcdefghijklmnop"
+LANGSMITH = "lsv2_pt_0123456789abcdef_0123456789"
+
+
 def record_a_delegation(content: bool = False):
     with span("argus.review", "chain") as stage:
         rec = TraceRecorder(content=content, clock=Clock())
@@ -56,7 +62,9 @@ def record_a_delegation(content: bool = False):
         rec.on_assistant(turn("m2", parent="tu-a"))
         rec.on_tool_start(pre("Grep", "tu-g", "ag-1", pattern="ghp_abcdefghijkl1234"))
         rec.on_tool_end(pre("Grep", "tu-g", "ag-1"))
-        rec.on_tool_start(pre("Read", "tu-r", "ag-1", file_path="nope.py"))
+        rec.on_tool_start(
+            pre("Read", "tu-r", "ag-1", file_path="nope.py", note=f"{EMAIL} {CLAUDE} {LANGSMITH}")
+        )
         rec.on_tool_end(pre("Read", "tu-r", "ag-1"), error="File does not exist")
         rec.on_tool_end(pre("Agent", "tu-a"))
         rec.on_assistant(turn("m3"))
@@ -125,6 +133,19 @@ def test_no_identity_and_no_content_by_default(spans) -> None:
     for s in spans.get_finished_spans():
         assert not any(k.startswith(("user.", "organization.")) for k in s.attributes)
         assert "output.value" not in s.attributes
+
+
+@pytest.mark.parametrize("content", [False, True])
+def test_no_span_attribute_carries_a_credential_or_an_identity_key(spans, content) -> None:
+    """Emails are not redacted by design, so the guard is that no identity key exists at all."""
+    record_a_delegation(content=content)
+    finished = spans.get_finished_spans()
+    assert finished
+    for s in finished:
+        assert not any(k.startswith(("user.", "organization.")) for k in s.attributes)
+        for value in s.attributes.values():
+            text = str(value)
+            assert not any(t in text for t in ("ghp_", "sk-ant-", "lsv2_")), (s.name, text)
 
 
 def test_content_mode_adds_assistant_text(spans) -> None:
