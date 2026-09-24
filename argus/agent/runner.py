@@ -101,8 +101,8 @@ class SdkRunner:
                     detail=_why(exc),
                 ) from exc
         finally:
-            recorder.close()
             state.recorder = None
+            recorder.close()
         if result is None:
             raise ReviewProtocolError(f"{stage}: the query ended without a result message")
         cost = result.total_cost_usd or 0.0

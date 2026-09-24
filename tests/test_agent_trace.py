@@ -1,6 +1,11 @@
+import io
+import json
+
 from claude_agent_sdk import AssistantMessage, TextBlock, ThinkingBlock
 from opentelemetry.trace import StatusCode
 
+from argus import telemetry
+from argus.agent import trace as trace_module
 from argus.agent.trace import TraceRecorder
 from argus.tracing import span
 
@@ -247,3 +252,53 @@ def test_a_tool_start_owned_by_the_same_agent_flushes_the_pending_turn(spans) ->
         (llm,) = named(spans.get_finished_spans(), "llm")
         assert llm.attributes["output.value"] == "partial"
         rec.close()
+
+
+def test_a_broken_recorder_never_raises_out_of_a_public_method(monkeypatch) -> None:
+    """Tracing must never change a review's outcome: every public method swallows its own bugs."""
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    with span("argus.review", "chain"):
+        # on_tool_start and on_assistant both open spans through tracer(); break that.
+        monkeypatch.setattr(trace_module, "tracer", boom)
+        rec = TraceRecorder(clock=Clock())
+        assert rec.on_tool_start(pre("Read", "tu-1", file_path="a.py")) is None
+        assert rec.on_assistant(turn("m1")) is None
+        monkeypatch.undo()
+
+        # on_tool_end and close: the span opened fine, but finishing it fails.
+        rec2 = TraceRecorder(clock=Clock())
+        rec2.on_tool_start(pre("Read", "tu-2", file_path="a.py"))
+        monkeypatch.setattr(rec2, "_finish", boom)
+        assert rec2.on_tool_end(pre("Read", "tu-2")) is None
+
+        rec3 = TraceRecorder(clock=Clock())
+        rec3.on_tool_start(pre("Read", "tu-3", file_path="a.py"))
+        monkeypatch.setattr(rec3, "_finish", boom)
+        assert rec3.close() is None
+
+        # on_tool_denied: its own call to on_tool_start fails to seed the span it then tags.
+        rec4 = TraceRecorder(clock=Clock())
+        monkeypatch.setattr(rec4, "on_tool_start", boom)
+        assert rec4.on_tool_denied(pre("Bash", "tu-4", command="rm -rf /"), "denied") is None
+
+        # on_subagent_start: the span it needs to tag raises on the way in.
+        rec5 = TraceRecorder(clock=Clock())
+        rec5.on_tool_start(pre("Agent", "tu-5", subagent_type="security"))
+        monkeypatch.setattr(rec5._spans["tu-5"], "set_attributes", boom)
+        assert rec5.on_subagent_start({"agent_id": "ag-1", "agent_type": "security"}) is None
+
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    failures = {e["method"] for e in events if e["event"] == "trace_record_failed"}
+    assert failures == {
+        "on_tool_start",
+        "on_assistant",
+        "on_tool_end",
+        "close",
+        "on_tool_denied",
+        "on_subagent_start",
+    }

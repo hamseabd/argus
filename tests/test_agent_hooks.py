@@ -3,6 +3,7 @@ import re
 
 import pytest
 
+from argus.agent import trace as trace_module
 from argus.agent.hooks import (
     ALLOWED_TOOLS,
     DENIED_TOOL_MATCHER,
@@ -16,6 +17,7 @@ from argus.agent.hooks import (
     deny_mutating_tools,
     limit_lead_reading,
 )
+from argus.agent.trace import TraceRecorder
 
 
 def hook_input(name: str, event: str = "PreToolUse", **extra) -> dict:
@@ -338,3 +340,28 @@ def test_hooks_run_without_a_recorder() -> None:
     observe = build_hooks(state)["PreToolUse"][-1].hooks[0]
 
     assert asyncio.run(observe(hook_input("Grep"), None, {"signal": None})) == {}
+
+
+def test_a_denial_still_comes_back_even_if_the_recorder_is_broken(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tracing is best-effort; a broken recorder must never swallow a real deny."""
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(trace_module, "tracer", boom)
+    state = HookState(read_budget=1)
+    state.recorder = TraceRecorder()  # a real recorder, its internals now broken
+
+    out = asyncio.run(deny_mutating_tools(state)(hook_input("Bash"), None, {"signal": None}))
+    specific = out["hookSpecificOutput"]
+    assert specific["permissionDecision"] == "deny"
+    assert "read-only" in specific["permissionDecisionReason"]
+
+    hook = limit_lead_reading(state)
+    asyncio.run(hook(hook_input("Read"), None, {"signal": None}))  # spends the one read
+    past_budget = asyncio.run(hook(hook_input("Read"), None, {"signal": None}))
+    specific2 = past_budget["hookSpecificOutput"]
+    assert specific2["permissionDecision"] == "deny"
+    assert "specialists" in specific2["permissionDecisionReason"]

@@ -25,8 +25,13 @@ The recorder starts spans with tracer().start_span(...) directly rather
 than through argus.tracing.span(), so it is not covered by that helper's
 own redaction; every attribute dict built here passes through clean()
 before it reaches start_span or set_attributes.
+
+Tracing must never change a review's outcome. Every public method is
+wrapped with _never_raises: an internal bug is logged and swallowed
+instead of propagating into a hook or the runner's message loop.
 """
 
+import functools
 import json
 import time
 from collections.abc import Callable
@@ -38,11 +43,30 @@ from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 
+from argus.telemetry import get_logger
 from argus.tracing import ERROR_CHARS, KIND, clean, meta, redact, tracer
 
 AGENT_TOOL = "Agent"
 _INPUT_CHARS = 200
 _UNFINISHED = "the query ended before this call finished"
+
+
+def _never_raises(fn: Callable[..., None]) -> Callable[..., None]:
+    """Catch, log, and swallow: a tracing bug must never fail the review it is watching."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> None:
+        try:
+            fn(*args, **kwargs)
+        except Exception as exc:
+            get_logger().warning(
+                "trace_record_failed",
+                method=fn.__name__,
+                error=redact(f"{type(exc).__name__}: {exc}", ERROR_CHARS),
+            )
+        return None
+
+    return wrapper
 
 
 @dataclass
@@ -69,6 +93,7 @@ class TraceRecorder:
         self._last: dict[str | None, int] = {None: clock()}  # agent key -> time of its last event
         self._pending: dict[str | None, _PendingTurn] = {}  # agent key -> its open llm span
 
+    @_never_raises
     def on_assistant(self, message: AssistantMessage) -> None:
         key = message.parent_tool_use_id
         now = self._clock()
@@ -86,6 +111,7 @@ class TraceRecorder:
         if mid is None:  # not part of a stream; its own turn, start to finish
             self._flush(key)
 
+    @_never_raises
     def on_tool_start(self, data: dict[str, Any]) -> None:
         tool_use_id = data.get("tool_use_id")
         if not tool_use_id or tool_use_id in self._spans:
@@ -112,6 +138,7 @@ class TraceRecorder:
         )
         self._open.add(tool_use_id)
 
+    @_never_raises
     def on_tool_end(self, data: dict[str, Any], error: str | None = None) -> None:
         tool_use_id = data.get("tool_use_id")
         if tool_use_id not in self._open:
@@ -123,6 +150,7 @@ class TraceRecorder:
             span.set_status(Status(StatusCode.ERROR, redact(error, ERROR_CHARS)))
         self._finish(tool_use_id, owner)
 
+    @_never_raises
     def on_tool_denied(self, data: dict[str, Any], reason: str) -> None:
         tool_use_id = data.get("tool_use_id")
         if not tool_use_id or tool_use_id in self._ended:
@@ -135,6 +163,7 @@ class TraceRecorder:
         )
         self._finish(tool_use_id, owner)
 
+    @_never_raises
     def on_subagent_start(self, data: dict[str, Any]) -> None:
         agent_id, agent_type = data.get("agent_id"), data.get("agent_type")
         queue = self._unclaimed.get(str(agent_type), [])
@@ -144,6 +173,7 @@ class TraceRecorder:
         self._agents[agent_id] = tool_use_id
         self._spans[tool_use_id].set_attributes(clean(meta(agent_id=agent_id)))
 
+    @_never_raises
     def close(self) -> None:
         """Flush every pending turn, then mark whatever tool call is still open as ERROR.
 

@@ -17,6 +17,7 @@ from claude_agent_sdk import (
 )
 
 from argus import telemetry
+from argus.agent import trace as trace_module
 from argus.agent.hooks import LEAD_AGENT, AgentCounters, HookState, build_hooks
 from argus.agent.runner import RunResult, SdkRunner
 from argus.domain.errors import AgentRunError, ReviewProtocolError
@@ -395,3 +396,33 @@ def test_no_content_on_the_stage_by_default(spans) -> None:
 
     (stage,) = [s for s in spans.get_finished_spans() if s.name == "argus.review"]
     assert "input.value" not in stage.attributes
+
+
+def test_a_run_survives_a_recorder_whose_internals_are_broken(monkeypatch, spans) -> None:
+    """A tracing bug must never fail the review: the run still returns its RunResult."""
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(trace_module, "tracer", boom)
+    state = HookState()
+    read = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "tool_use_id": "tu-r",
+        "tool_input": {},
+    }
+    script = [
+        AssistantMessage(content=[TextBlock("hi")], model="claude-opus-5", message_id="m1"),
+        ("PreToolUse", -1, read),
+        ("PostToolUse", 0, {**read, "hook_event_name": "PostToolUse"}),
+        result(),
+    ]
+
+    with span("argus.review", "chain"):
+        out = asyncio_run(
+            traced_runner(script).run("p", hooked_options(state), stage="review", state=state)
+        )
+
+    assert out.structured_output == {"verdict": "confirmed", "reasoning": "r", "confidence": 0.9}
+    assert state.recorder is None
