@@ -14,8 +14,12 @@ harness already sees:
 Hooks for one tool call may arrive in any order (matching hooks run
 concurrently), so every entry point creates the span if it is missing and
 a tool_use_id, once ended, is never reopened. AssistantMessage carries no
-timestamps: an llm span starts at its agent's previous event and ends on
-arrival, and says so in its attributes.
+timestamps, and the stream repeats one message_id once per content block:
+a turn's llm span starts on the first copy, counting that copy's usage,
+then stays pending, collecting text and the latest stop_reason across
+copies, until a different message_id, a tool hook it owns, or close()
+flushes it, ending it at the last copy seen and saying so in its
+attributes.
 
 The recorder starts spans with tracer().start_span(...) directly rather
 than through argus.tracing.span(), so it is not covered by that helper's
@@ -26,6 +30,7 @@ before it reaches start_span or set_attributes.
 import json
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from claude_agent_sdk import AssistantMessage, TextBlock
@@ -40,6 +45,17 @@ _INPUT_CHARS = 200
 _UNFINISHED = "the query ended before this call finished"
 
 
+@dataclass
+class _PendingTurn:
+    """An llm span still open across one message_id's repeated stream copies."""
+
+    span: Span
+    message_id: str | None = None
+    texts: list[str] = field(default_factory=list)
+    stop_reason: str | None = None
+    last: int = 0
+
+
 class TraceRecorder:
     def __init__(self, *, content: bool = False, clock: Callable[[], int] = time.time_ns) -> None:
         self._root = trace.set_span_in_context(trace.get_current_span())
@@ -51,15 +67,96 @@ class TraceRecorder:
         self._unclaimed: dict[str, list[str]] = {}  # subagent type -> Agent tool_use_ids
         self._agents: dict[str, str] = {}  # subagent agent_id -> its Agent tool_use_id
         self._last: dict[str | None, int] = {None: clock()}  # agent key -> time of its last event
-        self._seen: set[str] = set()
+        self._pending: dict[str | None, _PendingTurn] = {}  # agent key -> its open llm span
 
     def on_assistant(self, message: AssistantMessage) -> None:
-        if message.message_id is not None:
-            if message.message_id in self._seen:
-                return
-            self._seen.add(message.message_id)
         key = message.parent_tool_use_id
         now = self._clock()
+        mid = message.message_id
+        pending = self._pending.get(key)
+        if pending is None or mid is None or pending.message_id != mid:
+            self._flush(key)
+            self._start_llm(key, message, now)
+            pending = self._pending[key]
+            pending.message_id = mid
+        pending.texts.extend(b.text for b in message.content if isinstance(b, TextBlock))
+        if message.stop_reason is not None:
+            pending.stop_reason = message.stop_reason
+        pending.last = now
+        if mid is None:  # not part of a stream; its own turn, start to finish
+            self._flush(key)
+
+    def on_tool_start(self, data: dict[str, Any]) -> None:
+        tool_use_id = data.get("tool_use_id")
+        if not tool_use_id or tool_use_id in self._spans:
+            return
+        owner = self._owner(data)
+        self._flush(owner)
+        name = str(data.get("tool_name") or "tool")
+        now = self._clock()
+        attrs: dict[str, AttributeValue] = {
+            "gen_ai.tool.name": name,
+            "gen_ai.tool.call.id": tool_use_id,
+        }
+        if name == AGENT_TOOL:
+            subagent = _subagent_type(data.get("tool_input"))
+            span_name, attrs[KIND] = subagent, "chain"
+            attrs |= meta(agent=subagent)
+            self._unclaimed.setdefault(subagent, []).append(tool_use_id)
+            self._last[tool_use_id] = now
+        else:
+            span_name, attrs[KIND] = name, "tool"
+            attrs["input.value"] = _summary(data.get("tool_input"))
+        self._spans[tool_use_id] = tracer().start_span(
+            span_name, context=self._parent(owner), attributes=clean(attrs), start_time=now
+        )
+        self._open.add(tool_use_id)
+
+    def on_tool_end(self, data: dict[str, Any], error: str | None = None) -> None:
+        tool_use_id = data.get("tool_use_id")
+        if tool_use_id not in self._open:
+            return
+        owner = self._owner(data)
+        self._flush(owner)
+        span = self._spans[tool_use_id]
+        if error is not None:
+            span.set_status(Status(StatusCode.ERROR, redact(error, ERROR_CHARS)))
+        self._finish(tool_use_id, owner)
+
+    def on_tool_denied(self, data: dict[str, Any], reason: str) -> None:
+        tool_use_id = data.get("tool_use_id")
+        if not tool_use_id or tool_use_id in self._ended:
+            return
+        owner = self._owner(data)
+        self._flush(owner)
+        self.on_tool_start(data)
+        self._spans[tool_use_id].set_attributes(
+            clean(meta(denied=True, denial=redact(reason, ERROR_CHARS)))
+        )
+        self._finish(tool_use_id, owner)
+
+    def on_subagent_start(self, data: dict[str, Any]) -> None:
+        agent_id, agent_type = data.get("agent_id"), data.get("agent_type")
+        queue = self._unclaimed.get(str(agent_type), [])
+        if not agent_id or not queue:
+            return
+        tool_use_id = queue.pop(0)
+        self._agents[agent_id] = tool_use_id
+        self._spans[tool_use_id].set_attributes(clean(meta(agent_id=agent_id)))
+
+    def close(self) -> None:
+        """Flush every pending turn, then mark whatever tool call is still open as ERROR.
+
+        Safe to call twice.
+        """
+        for key in list(self._pending):
+            self._flush(key)
+        for tool_use_id in list(self._open):
+            self._spans[tool_use_id].set_status(Status(StatusCode.ERROR, _UNFINISHED))
+            self._finish(tool_use_id, None)
+
+    def _start_llm(self, key: str | None, message: AssistantMessage, now: int) -> None:
+        """Open a pending llm span from the first copy of a message, counting its usage."""
         usage = message.usage or {}
         uncached = usage.get("input_tokens") or 0
         cache_read = usage.get("cache_read_input_tokens") or 0
@@ -77,79 +174,28 @@ class TraceRecorder:
                 uncached_input_tokens=uncached,
                 cache_read_input_tokens=cache_read,
                 cache_creation_input_tokens=cache_creation,
-                stop_reason=message.stop_reason,
                 timing="approximate",
             ),
         }
-        if self._content:
-            text = "\n".join(b.text for b in message.content if isinstance(b, TextBlock))
-            if text:
-                attrs["output.value"] = redact(text)
         start = self._last.get(key, now)
         llm = tracer().start_span(
             "llm", context=self._parent(key), attributes=clean(attrs), start_time=start
         )
-        llm.end(end_time=now)
-        self._last[key] = now
+        self._pending[key] = _PendingTurn(span=llm)
 
-    def on_tool_start(self, data: dict[str, Any]) -> None:
-        tool_use_id = data.get("tool_use_id")
-        if not tool_use_id or tool_use_id in self._spans:
+    def _flush(self, key: str | None) -> None:
+        """End the key's pending llm span, if any, with everything its copies accumulated."""
+        pending = self._pending.pop(key, None)
+        if pending is None:
             return
-        name = str(data.get("tool_name") or "tool")
-        now = self._clock()
-        attrs: dict[str, AttributeValue] = {
-            "gen_ai.tool.name": name,
-            "gen_ai.tool.call.id": tool_use_id,
-        }
-        if name == AGENT_TOOL:
-            subagent = _subagent_type(data.get("tool_input"))
-            span_name, attrs[KIND] = subagent, "chain"
-            attrs |= meta(agent=subagent)
-            self._unclaimed.setdefault(subagent, []).append(tool_use_id)
-            self._last[tool_use_id] = now
-        else:
-            span_name, attrs[KIND] = name, "tool"
-            attrs["input.value"] = _summary(data.get("tool_input"))
-        owner = self._owner(data)
-        self._spans[tool_use_id] = tracer().start_span(
-            span_name, context=self._parent(owner), attributes=clean(attrs), start_time=now
-        )
-        self._open.add(tool_use_id)
-
-    def on_tool_end(self, data: dict[str, Any], error: str | None = None) -> None:
-        tool_use_id = data.get("tool_use_id")
-        if tool_use_id not in self._open:
-            return
-        span = self._spans[tool_use_id]
-        if error is not None:
-            span.set_status(Status(StatusCode.ERROR, redact(error, ERROR_CHARS)))
-        self._finish(tool_use_id, self._owner(data))
-
-    def on_tool_denied(self, data: dict[str, Any], reason: str) -> None:
-        tool_use_id = data.get("tool_use_id")
-        if not tool_use_id or tool_use_id in self._ended:
-            return
-        self.on_tool_start(data)
-        self._spans[tool_use_id].set_attributes(
-            clean(meta(denied=True, denial=redact(reason, ERROR_CHARS)))
-        )
-        self._finish(tool_use_id, self._owner(data))
-
-    def on_subagent_start(self, data: dict[str, Any]) -> None:
-        agent_id, agent_type = data.get("agent_id"), data.get("agent_type")
-        queue = self._unclaimed.get(str(agent_type), [])
-        if not agent_id or not queue:
-            return
-        tool_use_id = queue.pop(0)
-        self._agents[agent_id] = tool_use_id
-        self._spans[tool_use_id].set_attributes(clean(meta(agent_id=agent_id)))
-
-    def close(self) -> None:
-        """End whatever the query left open, as errors; safe to call twice."""
-        for tool_use_id in list(self._open):
-            self._spans[tool_use_id].set_status(Status(StatusCode.ERROR, _UNFINISHED))
-            self._finish(tool_use_id, None)
+        attrs: dict[str, AttributeValue] = meta(stop_reason=pending.stop_reason)
+        if self._content:
+            text = "\n".join(pending.texts)
+            if text:
+                attrs["output.value"] = text
+        pending.span.set_attributes(clean(attrs))
+        pending.span.end(end_time=pending.last)
+        self._last[key] = pending.last
 
     def _finish(self, tool_use_id: str, owner: str | None) -> None:
         now = self._clock()

@@ -1,4 +1,4 @@
-from claude_agent_sdk import AssistantMessage, TextBlock
+from claude_agent_sdk import AssistantMessage, TextBlock, ThinkingBlock
 from opentelemetry.trace import StatusCode
 
 from argus.agent.trace import TraceRecorder
@@ -28,6 +28,17 @@ def turn(mid: str, parent: str | None = None, text: str = "t", **usage) -> Assis
         parent_tool_use_id=parent,
         message_id=mid,
         usage=usage or {"input_tokens": 2, "output_tokens": 10, "cache_read_input_tokens": 100},
+    )
+
+
+def copy_of(mid: str, content: list, parent: str | None = None, **usage) -> AssistantMessage:
+    """One streamed copy of a turn: same message_id, an explicit block list."""
+    return AssistantMessage(
+        content=content,
+        model="claude-sonnet-5" if parent else "claude-opus-5",
+        parent_tool_use_id=parent,
+        message_id=mid,
+        usage=usage or None,
     )
 
 
@@ -176,3 +187,63 @@ def test_a_rerun_specialist_claims_the_next_delegation_of_its_type(spans) -> Non
     )
     (read,) = named(finished, "Read")
     assert read.parent.span_id == second.context.span_id
+
+
+def test_a_non_text_copy_then_a_text_copy_keep_one_span_with_the_text(spans) -> None:
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(content=True, clock=Clock())
+        rec.on_assistant(
+            copy_of(
+                "msg-1",
+                [ThinkingBlock(thinking="hmm", signature="sig")],
+                input_tokens=2,
+                output_tokens=10,
+                cache_read_input_tokens=100,
+            )
+        )
+        rec.on_assistant(
+            copy_of("msg-1", [TextBlock("answer")], input_tokens=999, output_tokens=999)
+        )
+        rec.close()
+
+    (llm,) = named(spans.get_finished_spans(), "llm")
+    assert llm.attributes["output.value"] == "answer"
+    assert llm.attributes["gen_ai.usage.input_tokens"] == 102  # from the first copy only
+    assert llm.attributes["gen_ai.usage.output_tokens"] == 10
+
+
+def test_text_from_every_copy_of_a_message_is_kept(spans) -> None:
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(content=True, clock=Clock())
+        rec.on_assistant(copy_of("msg-2", [TextBlock("a")], input_tokens=1, output_tokens=1))
+        rec.on_assistant(copy_of("msg-2", [TextBlock("b")]))
+        rec.close()
+
+    (llm,) = named(spans.get_finished_spans(), "llm")
+    assert "a" in llm.attributes["output.value"]
+    assert "b" in llm.attributes["output.value"]
+
+
+def test_close_flushes_a_pending_turn_with_no_unended_span(spans) -> None:
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(content=True, clock=Clock())
+        rec.on_assistant(turn("m1", text="unflushed"))
+        assert not named(spans.get_finished_spans(), "llm")  # still open
+        rec.close()
+
+    (llm,) = named(spans.get_finished_spans(), "llm")
+    assert llm.attributes["output.value"] == "unflushed"
+    assert llm.status.status_code != StatusCode.ERROR
+
+
+def test_a_tool_start_owned_by_the_same_agent_flushes_the_pending_turn(spans) -> None:
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(content=True, clock=Clock())
+        rec.on_tool_start(pre("Agent", "tu-a", subagent_type="correctness"))
+        rec.on_subagent_start({"agent_id": "ag-1", "agent_type": "correctness"})
+        rec.on_assistant(turn("m2", parent="tu-a", text="partial"))
+        assert not named(spans.get_finished_spans(), "llm")  # still open
+        rec.on_tool_start(pre("Read", "tu-r", "ag-1", file_path="a.py"))
+        (llm,) = named(spans.get_finished_spans(), "llm")
+        assert llm.attributes["output.value"] == "partial"
+        rec.close()
