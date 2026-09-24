@@ -12,6 +12,7 @@ is a no-op and nothing here changes a run. This module does not import the
 Agent SDK.
 """
 
+import json
 import logging
 import os
 import re
@@ -56,6 +57,18 @@ def tracer() -> trace.Tracer:
 def redact(text: str, limit: int = MAX_ATTRIBUTE_CHARS) -> str:
     cleaned = _CREDENTIAL.sub("[redacted]", text)
     return cleaned if len(cleaned) <= limit else cleaned[: limit - 3] + "..."
+
+
+def summarize(value: object, limit: int = 200) -> str:
+    """A tool input as one redacted, bounded line: sorted JSON, or repr() when JSON cannot hold it.
+
+    Shared by the audit log and the trace so both show a call the same way.
+    """
+    try:
+        text = json.dumps(value, sort_keys=True)
+    except (TypeError, ValueError):
+        text = repr(value)
+    return redact(text, limit)
 
 
 def clean(attributes: Mapping[str, AttributeValue]) -> dict[str, AttributeValue]:

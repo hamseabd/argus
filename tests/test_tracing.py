@@ -209,3 +209,13 @@ def test_exporter_warnings_become_structured_log_events(monkeypatch) -> None:
     (event,) = [e for e in events if e["event"] == "otel_warning"]
     assert event["logger"] == "opentelemetry.exporter.otlp"
     assert "ghp_abcdefghijkl" not in event["message"]
+
+
+def test_summarize_is_sorted_json_redacted_and_bounded() -> None:
+    assert tracing.summarize({"b": 1, "a": "ghp_abcdefghijkl1234"}) == '{"a": "[redacted]", "b": 1}'
+    assert len(tracing.summarize({"x": "y" * 500})) == 200
+    assert tracing.summarize({"x": "y" * 500}, limit=20).endswith("...")
+
+
+def test_summarize_falls_back_to_repr_for_what_json_cannot_hold() -> None:
+    assert tracing.summarize({1, 2}) == repr({1, 2})

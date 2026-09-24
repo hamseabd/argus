@@ -13,7 +13,6 @@ When a TraceRecorder is attached, the same hooks feed it the start, end,
 and denial of every tool call.
 """
 
-import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -24,7 +23,7 @@ from claude_agent_sdk.types import HookEvent
 
 from argus.agent.tools import GIT_HISTORY_TOOL_NAME
 from argus.telemetry import get_logger
-from argus.tracing import redact
+from argus.tracing import redact, summarize
 
 if TYPE_CHECKING:
     from argus.agent.trace import TraceRecorder
@@ -105,7 +104,7 @@ def deny_mutating_tools(state: HookState) -> Hook:
         )
         if state.recorder is not None:
             state.recorder.on_tool_denied(data, reason)
-        get_logger().warning("tool_denied", tool=name, input=_summarize(data.get("tool_input")))
+        get_logger().warning("tool_denied", tool=name, input=summarize(data.get("tool_input")))
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -167,7 +166,7 @@ def audit_tool_call(state: HookState) -> Hook:
         state.tool_calls += 1
         state.agent(data).tool_calls += 1
         get_logger().info(
-            "tool_call", tool=data.get("tool_name"), input=_summarize(data.get("tool_input"))
+            "tool_call", tool=data.get("tool_name"), input=summarize(data.get("tool_input"))
         )
         if state.recorder is not None:
             state.recorder.on_tool_end(data)
@@ -234,14 +233,6 @@ def build_hooks(state: HookState) -> dict[HookEvent, list[HookMatcher]]:
         "SubagentStart": [HookMatcher(hooks=[on_subagent_start(state)])],
         "SubagentStop": [HookMatcher(hooks=[on_subagent_stop(state)])],
     }
-
-
-def _summarize(tool_input: Any) -> str:
-    try:
-        text = json.dumps(tool_input, sort_keys=True)
-    except (TypeError, ValueError):
-        text = repr(tool_input)
-    return _truncate(text)
 
 
 def _truncate(text: str) -> str:

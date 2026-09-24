@@ -34,7 +34,6 @@ instead of propagating into a hook or the runner's message loop.
 """
 
 import functools
-import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -46,10 +45,9 @@ from opentelemetry.trace import Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 
 from argus.telemetry import get_logger
-from argus.tracing import ERROR_CHARS, KIND, clean, meta, redact, tracer
+from argus.tracing import ERROR_CHARS, KIND, clean, meta, redact, summarize, tracer
 
 AGENT_TOOL = "Agent"
-_INPUT_CHARS = 200
 _NAME_CHARS = 64
 """Span names built from hook data are model-controlled, so they are redacted and bounded."""
 _UNFINISHED = "the query ended before this call finished"
@@ -140,7 +138,7 @@ class TraceRecorder:
             self._last[tool_use_id] = now
         else:
             span_name, attrs[KIND] = redact(name, _NAME_CHARS), "tool"
-            attrs["input.value"] = _summary(data.get("tool_input"))
+            attrs["input.value"] = summarize(data.get("tool_input"))
         self._spans[tool_use_id] = tracer().start_span(
             span_name, context=self._parent(owner), attributes=clean(attrs), start_time=now
         )
@@ -254,11 +252,3 @@ class TraceRecorder:
 def _subagent_type(tool_input: Any) -> str:
     requested = tool_input.get("subagent_type") if isinstance(tool_input, dict) else None
     return requested if isinstance(requested, str) and requested else "agent"
-
-
-def _summary(tool_input: Any) -> str:
-    try:
-        text = json.dumps(tool_input, sort_keys=True)
-    except (TypeError, ValueError):
-        text = repr(tool_input)
-    return redact(text, _INPUT_CHARS)
