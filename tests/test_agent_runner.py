@@ -239,7 +239,7 @@ def test_a_wall_of_cli_output_cannot_become_the_error_message() -> None:
     with pytest.raises(AgentRunError) as info:
         asyncio_run(run(runner_for(failure)))
 
-    assert len(info.value.detail or "") <= 300
+    assert len(info.value.detail or "") == 300
 
 
 def test_a_failure_with_nothing_structured_still_reports_its_message() -> None:
@@ -396,6 +396,7 @@ def test_no_content_on_the_stage_by_default(spans) -> None:
 
     (stage,) = [s for s in spans.get_finished_spans() if s.name == "argus.review"]
     assert "input.value" not in stage.attributes
+    assert "output.value" not in stage.attributes
 
 
 def test_a_successful_run_puts_its_session_id_on_the_stage(spans) -> None:
