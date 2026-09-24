@@ -24,6 +24,7 @@ from claude_agent_sdk.types import HookEvent
 
 from argus.agent.tools import GIT_HISTORY_TOOL_NAME
 from argus.telemetry import get_logger
+from argus.tracing import redact
 
 if TYPE_CHECKING:
     from argus.agent.trace import TraceRecorder
@@ -244,6 +245,4 @@ def _summarize(tool_input: Any) -> str:
 
 
 def _truncate(text: str) -> str:
-    if len(text) <= _INPUT_SUMMARY_CHARS:
-        return text
-    return text[: _INPUT_SUMMARY_CHARS - 3] + "..."
+    return redact(text, _INPUT_SUMMARY_CHARS)

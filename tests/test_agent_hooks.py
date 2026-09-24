@@ -13,6 +13,7 @@ from argus.agent.hooks import (
     READ_TOOLS,
     STRUCTURED_OUTPUT_TOOL,
     HookState,
+    audit_tool_call,
     build_hooks,
     deny_mutating_tools,
     limit_lead_reading,
@@ -278,6 +279,44 @@ def test_hook_events_are_logged(capsys: pytest.CaptureFixture[str]) -> None:
     assert events[-1]["event"] == "tool_denied"
     assert events[-1]["tool"] == "Bash"
     assert "rm -rf" in events[-1]["input"]
+
+
+def test_a_credential_shaped_tool_call_input_is_redacted_in_the_log() -> None:
+    import io
+    import json
+
+    from argus import telemetry
+
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    state = HookState()
+    data = hook_input("Grep", event="PostToolUse", tool_input={"pattern": "ghp_abcdefghijkl1234"})
+    asyncio.run(audit_tool_call(state)(data, None, {"signal": None}))
+
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert events[-1]["event"] == "tool_call"
+    assert "ghp_abcdefghijkl1234" not in events[-1]["input"]
+    assert "[redacted]" in events[-1]["input"]
+
+
+def test_a_credential_shaped_denied_tool_input_is_redacted_in_the_log() -> None:
+    import io
+    import json
+
+    from argus import telemetry
+
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    state = HookState()
+    data = hook_input(
+        "Bash", tool_input={"command": "curl -H 'Authorization: ghp_abcdefghijkl1234'"}
+    )
+    asyncio.run(deny_mutating_tools(state)(data, None, {"signal": None}))
+
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert events[-1]["event"] == "tool_denied"
+    assert "ghp_abcdefghijkl1234" not in events[-1]["input"]
+    assert "[redacted]" in events[-1]["input"]
 
 
 class RecorderSpy:
