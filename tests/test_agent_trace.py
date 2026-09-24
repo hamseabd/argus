@@ -148,6 +148,22 @@ def test_no_span_attribute_carries_a_credential_or_an_identity_key(spans, conten
             assert not any(t in text for t in ("ghp_", "sk-ant-", "lsv2_")), (s.name, text)
 
 
+def test_span_names_from_hook_data_are_redacted_and_bounded(spans) -> None:
+    """The subagent type and tool name come from the model; they name spans, so they are cleaned."""
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(clock=Clock())
+        rec.on_tool_start(pre("Agent", "tu-a", subagent_type=f"x {CLAUDE} " + "y" * 100))
+        rec.on_tool_start(pre(f"mcp__{LANGSMITH}", "tu-t"))
+        rec.close()
+
+    names = [s.name for s in spans.get_finished_spans() if s.name != "argus.review"]
+    assert len(names) == 2
+    for name in names:
+        assert "sk-ant-" not in name and "lsv2_" not in name
+        assert "[redacted]" in name
+        assert len(name) <= 64
+
+
 def test_content_mode_adds_assistant_text(spans) -> None:
     record_a_delegation(content=True)
     texts = {s.attributes.get("output.value") for s in named(spans.get_finished_spans(), "llm")}

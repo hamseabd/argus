@@ -50,6 +50,8 @@ from argus.tracing import ERROR_CHARS, KIND, clean, meta, redact, tracer
 
 AGENT_TOOL = "Agent"
 _INPUT_CHARS = 200
+_NAME_CHARS = 64
+"""Span names built from hook data are model-controlled, so they are redacted and bounded."""
 _UNFINISHED = "the query ended before this call finished"
 
 
@@ -132,12 +134,12 @@ class TraceRecorder:
         }
         if name == AGENT_TOOL:
             subagent = _subagent_type(data.get("tool_input"))
-            span_name, attrs[KIND] = subagent, "chain"
+            span_name, attrs[KIND] = redact(subagent, _NAME_CHARS), "chain"
             attrs |= meta(agent=subagent)
             self._unclaimed.setdefault(subagent, []).append(tool_use_id)
             self._last[tool_use_id] = now
         else:
-            span_name, attrs[KIND] = name, "tool"
+            span_name, attrs[KIND] = redact(name, _NAME_CHARS), "tool"
             attrs["input.value"] = _summary(data.get("tool_input"))
         self._spans[tool_use_id] = tracer().start_span(
             span_name, context=self._parent(owner), attributes=clean(attrs), start_time=now
