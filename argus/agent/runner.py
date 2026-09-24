@@ -32,7 +32,7 @@ from argus.agent.trace import TraceRecorder
 from argus.domain.errors import AgentRunError, ReviewProtocolError
 from argus.domain.models import StageMetrics
 from argus.telemetry import bind_run, get_logger
-from argus.tracing import redact
+from argus.tracing import meta, redact
 
 QueryFn = Callable[..., AsyncIterator[Any]]
 
@@ -117,6 +117,7 @@ class SdkRunner:
                 cost_usd=cost,
                 session_id=result.session_id,
             )
+        stage_span.set_attributes(meta(session_id=result.session_id))
         if self._trace_content:
             stage_span.set_attribute(
                 "output.value", redact(json.dumps(result.structured_output, sort_keys=True))

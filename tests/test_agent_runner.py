@@ -398,6 +398,17 @@ def test_no_content_on_the_stage_by_default(spans) -> None:
     assert "input.value" not in stage.attributes
 
 
+def test_a_successful_run_puts_its_session_id_on_the_stage(spans) -> None:
+    state = HookState()
+    with span("argus.review", "chain"):
+        asyncio_run(
+            traced_runner([result()]).run("p", hooked_options(state), stage="review", state=state)
+        )
+
+    (stage,) = [s for s in spans.get_finished_spans() if s.name == "argus.review"]
+    assert stage.attributes["langsmith.metadata.session_id"] == "sess-1"
+
+
 def test_a_run_survives_a_recorder_whose_internals_are_broken(monkeypatch, spans) -> None:
     """A tracing bug must never fail the review: the run still returns its RunResult."""
 
