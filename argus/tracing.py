@@ -142,6 +142,10 @@ def span(
             raise
 
 
+_installed: TracerProvider | None = None
+"""The provider session() installed for this process, if any."""
+
+
 def build_provider(
     environ: Mapping[str, str] = os.environ, *, exporter: SpanExporter | None = None
 ) -> TracerProvider | None:
@@ -159,31 +163,36 @@ def build_provider(
 
 @contextmanager
 def session(environ: Mapping[str, str] = os.environ) -> Iterator[bool]:
-    """Install the provider for the block and flush it on the way out; yields whether tracing is on.
+    """Trace the block and flush on the way out; yields whether tracing is on.
 
     A short-lived CLI run would otherwise exit before the batch processor sends.
+    OTel accepts one global provider per process, so the first session installs
+    it and later ones reuse it; the provider shuts itself down at exit.
     A configuration the exporter rejects (a malformed OTEL_* variable) turns
     tracing off with a warning; it never stops the review.
     """
-    try:
-        provider = build_provider(environ)
-    except Exception as exc:
-        # Yield outside the handler, or a review failure would chain to this error.
-        get_logger().warning("tracing_disabled", error=redact(str(exc), ERROR_CHARS))
-        provider = None
+    global _installed
+    provider = _installed
     if provider is None:
-        yield False
-        return
-    trace.set_tracer_provider(provider)
+        try:
+            provider = build_provider(environ)
+        except Exception as exc:
+            # Yield outside the handler, or a review failure would chain to this error.
+            get_logger().warning("tracing_disabled", error=redact(str(exc), ERROR_CHARS))
+        if provider is None:
+            yield False
+            return
+        trace.set_tracer_provider(provider)
+        _installed = provider
     bridge = _StructlogBridge()
     otel_logger = logging.getLogger("opentelemetry")
     otel_logger.addHandler(bridge)
     otel_logger.propagate = False
-    get_logger().info("tracing_enabled", endpoint=redact(environ[ENDPOINT_ENV]))
+    get_logger().info("tracing_enabled", endpoint=redact(environ.get(ENDPOINT_ENV, "")))
     try:
         yield True
     finally:
-        provider.shutdown()
+        provider.force_flush()
         otel_logger.removeHandler(bridge)
         otel_logger.propagate = True
 

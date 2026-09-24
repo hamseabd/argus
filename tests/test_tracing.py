@@ -62,9 +62,32 @@ def test_session_installs_the_provider_and_flushes_it_on_exit(
     with tracing.session({tracing.ENDPOINT_ENV: "http://127.0.0.1:9"}) as enabled:
         assert enabled is True
         (provider,) = installed
-        shut: list[bool] = []
-        monkeypatch.setattr(provider, "shutdown", lambda: shut.append(True))
-    assert shut == [True]
+        flushed: list[bool] = []
+        monkeypatch.setattr(provider, "force_flush", lambda: flushed.append(True))
+    assert flushed == [True]
+
+
+def test_a_second_session_reuses_the_installed_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OTel accepts one global provider per process; a second install is ignored.
+
+    Shutting the first down at the end of its session would leave every later
+    session exporting through a dead provider, so sessions flush and share it.
+    """
+    installed: list[TracerProvider] = []
+    monkeypatch.setattr(tracing.trace, "set_tracer_provider", installed.append)
+    endpoint = {tracing.ENDPOINT_ENV: "http://127.0.0.1:9"}
+
+    calls: list[str] = []
+    with tracing.session(endpoint) as first:
+        (provider,) = installed
+        monkeypatch.setattr(provider, "shutdown", lambda: calls.append("shutdown"))
+        monkeypatch.setattr(provider, "force_flush", lambda: calls.append("flush"))
+    with tracing.session(endpoint) as second:
+        pass
+
+    assert first is True and second is True
+    assert len(installed) == 1
+    assert calls == ["flush", "flush"]
 
 
 @pytest.mark.parametrize(
