@@ -5,7 +5,9 @@ exported (see argus.tracing), so the tree is rebuilt here from what the
 harness already sees:
 
 - The lead's Agent tool call is the subagent's span, keyed by its
-  tool_use_id and named after tool_input["subagent_type"].
+  tool_use_id and named after tool_input["subagent_type"]. It ends when the
+  call has returned and the subagent has stopped, whichever is later, since a
+  backgrounded call returns before its subagent runs.
 - A subagent's AssistantMessages name that tool_use_id as their parent.
 - A subagent's tool hooks carry its agent_id instead; SubagentStart gives
   agent_id and type, and claims the oldest unclaimed Agent call of that
@@ -92,6 +94,9 @@ class TraceRecorder:
         self._ended: set[str] = set()
         self._unclaimed: dict[str, list[str]] = {}  # subagent type -> Agent tool_use_ids
         self._agents: dict[str, str] = {}  # subagent agent_id -> its Agent tool_use_id
+        self._agent_calls: set[str] = set()  # tool_use_ids of the lead's Agent calls
+        self._returned: set[str] = set()  # Agent calls that returned before their subagent stopped
+        self._stopped: set[str] = set()  # Agent calls whose subagent has stopped
         self._last: dict[str | None, int] = {None: clock()}  # agent key -> time of its last event
         self._pending: dict[str | None, _PendingTurn] = {}  # agent key -> its open llm span
         self._started: set[str] = set()  # message_ids that already opened an llm span
@@ -135,6 +140,7 @@ class TraceRecorder:
             span_name, attrs[KIND] = redact(subagent, _NAME_CHARS), "chain"
             attrs |= meta(agent=subagent)
             self._unclaimed.setdefault(subagent, []).append(tool_use_id)
+            self._agent_calls.add(tool_use_id)
             self._last[tool_use_id] = now
         else:
             span_name, attrs[KIND] = redact(name, _NAME_CHARS), "tool"
@@ -153,6 +159,11 @@ class TraceRecorder:
         span = self._spans[tool_use_id]
         if error is not None:
             span.set_status(Status(StatusCode.ERROR, redact(error, ERROR_CHARS)))
+        elif tool_use_id in self._agent_calls and tool_use_id not in self._stopped:
+            # A backgrounded Agent call returns before its specialist runs; the
+            # specialist's span ends when the specialist does.
+            self._returned.add(tool_use_id)
+            return
         self._finish(tool_use_id, owner)
 
     @_never_raises
@@ -178,6 +189,16 @@ class TraceRecorder:
         self._spans[tool_use_id].set_attributes(clean(meta(agent_id=agent_id)))
 
     @_never_raises
+    def on_subagent_stop(self, data: dict[str, Any]) -> None:
+        tool_use_id = self._agents.get(str(data.get("agent_id")))
+        if tool_use_id is None:
+            return
+        self._flush(tool_use_id)
+        self._stopped.add(tool_use_id)
+        if tool_use_id in self._returned and tool_use_id in self._open:
+            self._finish(tool_use_id, None)
+
+    @_never_raises
     def close(self) -> None:
         """Flush every pending turn, then mark whatever tool call is still open as ERROR.
 
@@ -185,6 +206,8 @@ class TraceRecorder:
         """
         for key in list(self._pending):
             self._flush(key)
+        for tool_use_id in list(self._open & self._returned):
+            self._finish(tool_use_id, None)  # the call itself returned; only its stop was missed
         for tool_use_id in list(self._open):
             self._spans[tool_use_id].set_status(Status(StatusCode.ERROR, _UNFINISHED))
             self._finish(tool_use_id, None)
