@@ -290,6 +290,50 @@ def test_the_next_turn_starts_after_the_tools_it_waited_on(spans) -> None:
     assert m2.start_time >= read.end_time
 
 
+def test_a_message_without_a_message_id_is_its_own_turn(spans) -> None:
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(clock=Clock())
+        rec.on_assistant(turn(None))  # type: ignore[arg-type]
+        (llm,) = named(spans.get_finished_spans(), "llm")  # flushed at once, not pending
+        rec.on_assistant(turn(None))  # type: ignore[arg-type]
+        rec.close()
+
+    assert llm.attributes["gen_ai.usage.input_tokens"] == 102
+    assert len(named(spans.get_finished_spans(), "llm")) == 2
+
+
+def test_a_tool_from_an_unclaimed_agent_id_hangs_under_the_stage(spans) -> None:
+    with span("argus.review", "chain") as stage:
+        rec = TraceRecorder(clock=Clock())
+        rec.on_tool_start(pre("Read", "tu-r", "ag-unknown", file_path="a.py"))
+        rec.on_tool_end(pre("Read", "tu-r", "ag-unknown"))
+        rec.close()
+
+    (read,) = named(spans.get_finished_spans(), "Read")
+    assert read.parent.span_id == stage.get_span_context().span_id
+
+
+def test_a_turn_with_an_unknown_parent_hangs_under_the_stage(spans) -> None:
+    with span("argus.review", "chain") as stage:
+        rec = TraceRecorder(clock=Clock())
+        rec.on_assistant(turn("m1", parent="tu-never-seen"))
+        rec.close()
+
+    (llm,) = named(spans.get_finished_spans(), "llm")
+    assert llm.parent.span_id == stage.get_span_context().span_id
+
+
+def test_content_mode_redacts_the_model_text(spans) -> None:
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(content=True, clock=Clock())
+        rec.on_assistant(turn("m1", text="found ghp_abcdefghijkl1234 in the diff"))
+        rec.close()
+
+    (llm,) = named(spans.get_finished_spans(), "llm")
+    assert "ghp_abcdefghijkl1234" not in llm.attributes["output.value"]
+    assert "[redacted]" in llm.attributes["output.value"]
+
+
 def test_a_broken_recorder_never_raises_out_of_a_public_method(monkeypatch) -> None:
     """Tracing must never change a review's outcome: every public method swallows its own bugs."""
     stream = io.StringIO()
