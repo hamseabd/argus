@@ -241,17 +241,53 @@ def test_close_flushes_a_pending_turn_with_no_unended_span(spans) -> None:
     assert llm.status.status_code != StatusCode.ERROR
 
 
-def test_a_tool_start_owned_by_the_same_agent_flushes_the_pending_turn(spans) -> None:
+def test_tool_hooks_between_copies_of_one_message_keep_one_llm_span(spans) -> None:
+    """One message with several tool_use blocks streams a copy per block, hooks in between."""
     with span("argus.review", "chain"):
         rec = TraceRecorder(content=True, clock=Clock())
         rec.on_tool_start(pre("Agent", "tu-a", subagent_type="correctness"))
         rec.on_subagent_start({"agent_id": "ag-1", "agent_type": "correctness"})
-        rec.on_assistant(turn("m2", parent="tu-a", text="partial"))
-        assert not named(spans.get_finished_spans(), "llm")  # still open
+        rec.on_assistant(copy_of("m2", [TextBlock("first")], parent="tu-a", input_tokens=5631))
         rec.on_tool_start(pre("Read", "tu-r", "ag-1", file_path="a.py"))
-        (llm,) = named(spans.get_finished_spans(), "llm")
-        assert llm.attributes["output.value"] == "partial"
+        rec.on_tool_end(pre("Read", "tu-r", "ag-1"))
+        rec.on_assistant(copy_of("m2", [TextBlock("second")], parent="tu-a", input_tokens=5631))
+        rec.on_tool_start(pre("Grep", "tu-g", "ag-1", pattern="x"))
+        rec.on_tool_end(pre("Grep", "tu-g", "ag-1"))
+        rec.on_assistant(copy_of("m2", [TextBlock("third")], parent="tu-a", input_tokens=5631))
         rec.close()
+
+    (llm,) = named(spans.get_finished_spans(), "llm")
+    assert llm.attributes["gen_ai.usage.input_tokens"] == 5631
+    assert llm.attributes["output.value"] == "first\nsecond\nthird"
+
+
+def test_a_late_copy_of_an_already_flushed_message_is_dropped(spans) -> None:
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(content=True, clock=Clock())
+        rec.on_assistant(copy_of("m1", [TextBlock("one")], input_tokens=3))
+        rec.on_assistant(copy_of("m2", [TextBlock("two")], input_tokens=4))
+        rec.on_assistant(copy_of("m1", [TextBlock("stale")], input_tokens=3))
+        rec.close()
+
+    llms = named(spans.get_finished_spans(), "llm")
+    assert len(llms) == 2
+    assert sum(s.attributes["gen_ai.usage.input_tokens"] for s in llms) == 7
+    assert all("stale" not in s.attributes["output.value"] for s in llms)
+
+
+def test_the_next_turn_starts_after_the_tools_it_waited_on(spans) -> None:
+    with span("argus.review", "chain"):
+        rec = TraceRecorder(clock=Clock())
+        rec.on_assistant(turn("m1"))
+        rec.on_tool_start(pre("Read", "tu-r", file_path="a.py"))
+        rec.on_tool_end(pre("Read", "tu-r"))
+        rec.on_assistant(turn("m2"))
+        rec.close()
+
+    finished = spans.get_finished_spans()
+    (read,) = named(finished, "Read")
+    m2 = max(named(finished, "llm"), key=lambda s: s.start_time)
+    assert m2.start_time >= read.end_time
 
 
 def test_a_broken_recorder_never_raises_out_of_a_public_method(monkeypatch) -> None:

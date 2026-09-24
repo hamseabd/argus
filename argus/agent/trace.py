@@ -14,12 +14,14 @@ harness already sees:
 Hooks for one tool call may arrive in any order (matching hooks run
 concurrently), so every entry point creates the span if it is missing and
 a tool_use_id, once ended, is never reopened. AssistantMessage carries no
-timestamps, and the stream repeats one message_id once per content block:
-a turn's llm span starts on the first copy, counting that copy's usage,
-then stays pending, collecting text and the latest stop_reason across
-copies, until a different message_id, a tool hook it owns, or close()
-flushes it, ending it at the last copy seen and saying so in its
-attributes.
+timestamps, and the stream repeats one message_id once per content block,
+with the tool hooks for earlier blocks firing between copies: a turn's llm
+span starts on the first copy, counting that copy's usage, then stays
+pending, collecting text and the latest stop_reason across copies, until
+a different message_id for the same agent, a message without one, or
+close() flushes it, ending it at the last copy seen and saying so in its
+attributes. A copy that arrives after its turn was flushed is dropped, so
+no turn is counted twice.
 
 The recorder starts spans with tracer().start_span(...) directly rather
 than through argus.tracing.span(), so it is not covered by that helper's
@@ -92,6 +94,7 @@ class TraceRecorder:
         self._agents: dict[str, str] = {}  # subagent agent_id -> its Agent tool_use_id
         self._last: dict[str | None, int] = {None: clock()}  # agent key -> time of its last event
         self._pending: dict[str | None, _PendingTurn] = {}  # agent key -> its open llm span
+        self._started: set[str] = set()  # message_ids that already opened an llm span
 
     @_never_raises
     def on_assistant(self, message: AssistantMessage) -> None:
@@ -100,10 +103,14 @@ class TraceRecorder:
         mid = message.message_id
         pending = self._pending.get(key)
         if pending is None or mid is None or pending.message_id != mid:
+            if mid is not None and mid in self._started:
+                return  # a late copy of a turn already flushed; counted once already
             self._flush(key)
             self._start_llm(key, message, now)
             pending = self._pending[key]
             pending.message_id = mid
+            if mid is not None:
+                self._started.add(mid)
         pending.texts.extend(b.text for b in message.content if isinstance(b, TextBlock))
         if message.stop_reason is not None:
             pending.stop_reason = message.stop_reason
@@ -117,7 +124,6 @@ class TraceRecorder:
         if not tool_use_id or tool_use_id in self._spans:
             return
         owner = self._owner(data)
-        self._flush(owner)
         name = str(data.get("tool_name") or "tool")
         now = self._clock()
         attrs: dict[str, AttributeValue] = {
@@ -144,7 +150,6 @@ class TraceRecorder:
         if tool_use_id not in self._open:
             return
         owner = self._owner(data)
-        self._flush(owner)
         span = self._spans[tool_use_id]
         if error is not None:
             span.set_status(Status(StatusCode.ERROR, redact(error, ERROR_CHARS)))
@@ -156,7 +161,6 @@ class TraceRecorder:
         if not tool_use_id or tool_use_id in self._ended:
             return
         owner = self._owner(data)
-        self._flush(owner)
         self.on_tool_start(data)
         self._spans[tool_use_id].set_attributes(
             clean(meta(denied=True, denial=redact(reason, ERROR_CHARS)))
@@ -225,7 +229,8 @@ class TraceRecorder:
                 attrs["output.value"] = text
         pending.span.set_attributes(clean(attrs))
         pending.span.end(end_time=pending.last)
-        self._last[key] = pending.last
+        # A tool call the turn waited on may have ended after its last copy.
+        self._last[key] = max(self._last.get(key, 0), pending.last)
 
     def _finish(self, tool_use_id: str, owner: str | None) -> None:
         now = self._clock()
