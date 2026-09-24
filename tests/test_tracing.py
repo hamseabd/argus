@@ -89,6 +89,20 @@ def test_a_malformed_otel_variable_disables_tracing_instead_of_the_run(
     assert value in event["error"]
 
 
+def test_a_review_failure_is_not_chained_to_a_disabled_tracing_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "abc")
+
+    with (
+        pytest.raises(RuntimeError) as info,
+        tracing.session({tracing.ENDPOINT_ENV: "http://127.0.0.1:9"}),
+    ):
+        raise RuntimeError("the review failed")
+
+    assert info.value.__context__ is None
+
+
 def test_session_redacts_credentials_in_the_logged_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

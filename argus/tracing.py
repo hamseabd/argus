@@ -168,9 +168,9 @@ def session(environ: Mapping[str, str] = os.environ) -> Iterator[bool]:
     try:
         provider = build_provider(environ)
     except Exception as exc:
+        # Yield outside the handler, or a review failure would chain to this error.
         get_logger().warning("tracing_disabled", error=redact(str(exc), ERROR_CHARS))
-        yield False
-        return
+        provider = None
     if provider is None:
         yield False
         return
