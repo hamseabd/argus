@@ -26,6 +26,10 @@ name: argus-review
 # GitHub App, minted just before the review step and revoked when the job
 # ends, so it appears under Argus's own name. The workflow's own token is
 # read-only.
+#
+# Tracing: with the optional LANGSMITH_API_KEY secret, the review is traced
+# to LangSmith over OTLP. The key reaches only the review step; GitHub masks
+# it in logs. Without it, nothing is exported.
 
 on:
   pull_request:
@@ -52,6 +56,9 @@ on:
       ARGUS_APP_PRIVATE_KEY:
         description: Private key of the Argus GitHub App
         required: true
+      LANGSMITH_API_KEY:
+        description: Optional LangSmith API key; when set, the review is traced to the "argus" project
+        required: false
 
 permissions:
   contents: read
@@ -107,13 +114,19 @@ jobs:
           permission-contents: read
       - name: Review
         working-directory: target
-        run: >-
-          uv run --project "$GITHUB_WORKSPACE" argus review
-          --pr "$PR_NUMBER" --post --json "$GITHUB_WORKSPACE/argus-review.json"
+        run: |
+          # Traces go to LangSmith only when its key is present; without it tracing stays off.
+          if [ -n "$LANGSMITH_API_KEY" ]; then
+            export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.smith.langchain.com/otel
+            export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=$LANGSMITH_API_KEY,Langsmith-Project=argus"
+          fi
+          uv run --project "$GITHUB_WORKSPACE" argus review \
+            --pr "$PR_NUMBER" --post --json "$GITHUB_WORKSPACE/argus-review.json"
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GITHUB_TOKEN: ${{ steps.argus-app.outputs.token }}
           ARGUS_LOG_FORMAT: json
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
       - name: Keep the review record
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
