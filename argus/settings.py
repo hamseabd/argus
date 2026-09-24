@@ -44,3 +44,7 @@ class Settings(BaseSettings):
     diff_size_cap: int = Field(default=DIFF_SIZE_CAP, ge=1)
     log_format: LogFormat = "auto"
     log_level: LogLevel = "info"
+    trace_content: bool = Field(
+        default=False,
+        description="Put prompts, structured output, and model text on trace spans.",
+    )

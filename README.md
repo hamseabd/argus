@@ -25,7 +25,7 @@ The verifier confirmed it, and the fix landed with a test before merge.
 - **Verifies before it reports.** Every finding gets its own fresh verifier query whose only job is to refute it by reading the code. Rejected findings are dropped; failed verifications are reported as `unverified`, never as confirmed.
 - **Posts inline.** A finding lands as a review comment on its line when that line is in the diff, otherwise in the review body. The review never requests changes; merge gating is the CLI exit code.
 - **Never touches the repository.** Reviewers get `Read`, `Grep`, `Glob`, `Agent`, and one custom read-only tool served by an in-process MCP server. Mutating tools are removed from the tool set and denied again by a `PreToolUse` hook, so the guardrail is layered, not a prompt instruction.
-- **Explains itself.** Structured JSON telemetry carries cost, tokens, turns, duration, subagent count, and rejected structured outputs per stage, plus a tool-call audit trail, under one `run_id`. The review stage is attributed per agent: turns, tool calls, tokens, and duration for the lead and each specialist, in the JSON artifact and the report footer.
+- **Explains itself.** Structured JSON telemetry carries cost, tokens, turns, duration, subagent count, and rejected structured outputs per stage, plus a tool-call audit trail, under one `run_id`. The review stage is attributed per agent: turns, tool calls, tokens, and duration for the lead and each specialist, in the JSON artifact and the report footer. With an OTLP endpoint set, each review is also one OpenTelemetry trace: the run, the review and each verification, and under them every model turn and tool call of the lead and each specialist, with tokens; see [Tracing](#tracing).
 
 ## Design decisions
 
@@ -155,6 +155,22 @@ Exit codes: `0` success, `1` error, `2` bad command line, `3` severity gate trip
 
 Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` environment variables (`ARGUS_LEAD_MODEL`, `ARGUS_VERIFY_CONCURRENCY`, `ARGUS_LOG_FORMAT`, `ARGUS_LOG_LEVEL`, and so on; see `argus/settings.py`).
 
+### Tracing
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` (and `OTEL_EXPORTER_OTLP_HEADERS` for auth) and a review is exported as one OpenTelemetry trace; unset, nothing is exported.
+Argus builds the spans itself from the SDK's message stream and hooks and turns Claude Code's native telemetry off, because the native spans carry the account's email and ids, and a backend that keeps only the attributes it maps (LangSmith) shows them without tool names or tokens.
+Spans follow the `gen_ai` conventions plus LangSmith's keys; tool inputs are summarized and redacted as in the logs.
+By default no prompt, diff, or model text leaves the machine.
+`ARGUS_TRACE_CONTENT=true` adds the prompt, which contains the diff under review, the structured output, and the model's text to the spans, and sends them to your backend.
+Redaction strips only the token formats Argus knows (Claude, GitHub, and LangSmith credentials), not every secret a diff can hold, so enable it only for code you are willing to send there.
+`LANGSMITH_API_KEY` is your LangSmith API key; set it first.
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.smith.langchain.com/otel
+export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=$LANGSMITH_API_KEY,Langsmith-Project=argus"
+argus review --diff --base main
+```
+
 ### As a GitHub Action
 
 [`.github/workflows/review.yml`](.github/workflows/review.yml) reviews pull requests on this repository when they open or leave draft, and on demand for a PR number.
@@ -162,6 +178,7 @@ It does not run on every push, so a busy branch neither burns quota nor stacks d
 Pull requests from forks and from Dependabot are skipped, because GitHub gives neither any secrets; a maintainer can still review one on demand.
 The review is posted by a GitHub App named Argus, through a short-lived installation token minted just before the review step and revoked when the job ends, so it appears under Argus's own identity and the workflow's own token stays read-only.
 The workflow needs three repository secrets: `CLAUDE_CODE_OAUTH_TOKEN`, and the app's `ARGUS_APP_ID` and `ARGUS_APP_PRIVATE_KEY`.
+An optional fourth, `LANGSMITH_API_KEY`, traces each review to LangSmith; without it nothing is exported.
 The app needs `Pull requests: Read and write` and `Contents: Read-only`, and must be installed on the repository.
 
 #### Reviewing another repository
@@ -188,6 +205,9 @@ jobs:
       ARGUS_APP_ID: ${{ secrets.ARGUS_APP_ID }}
       ARGUS_APP_PRIVATE_KEY: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
 ```
+
+Tracing is optional and needs a pin at or after the commit that adds it; the `v1` commit pinned above predates it and does not accept a `LANGSMITH_API_KEY` secret.
+With such a pin, pass `LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}` as well to trace your reviews.
 
 Argus is checked out from this repository at the commit the caller pinned, never from the repository under review, so the trust model is unchanged: the pull request is read, not executed.
 Pin the commit, as above, because the workflow receives a secret and write access and a moving tag is a supply-chain risk; `v1` is a tag this repository moves forward with compatible releases, and the comment records which release the commit is.

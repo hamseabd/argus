@@ -3,6 +3,7 @@ import re
 
 import pytest
 
+from argus.agent import trace as trace_module
 from argus.agent.hooks import (
     ALLOWED_TOOLS,
     DENIED_TOOL_MATCHER,
@@ -12,10 +13,12 @@ from argus.agent.hooks import (
     READ_TOOLS,
     STRUCTURED_OUTPUT_TOOL,
     HookState,
+    audit_tool_call,
     build_hooks,
     deny_mutating_tools,
     limit_lead_reading,
 )
+from argus.agent.trace import TraceRecorder
 
 
 def hook_input(name: str, event: str = "PreToolUse", **extra) -> dict:
@@ -250,7 +253,11 @@ def test_build_hooks_registers_the_expected_events_and_matchers() -> None:
         "SubagentStart",
         "SubagentStop",
     }
-    assert [m.matcher for m in hooks["PreToolUse"]] == [DENIED_TOOL_MATCHER, READ_TOOL_MATCHER]
+    assert [m.matcher for m in hooks["PreToolUse"]] == [
+        DENIED_TOOL_MATCHER,
+        READ_TOOL_MATCHER,
+        None,
+    ]
     assert hooks["PostToolUse"][0].matcher is None
     for matchers in hooks.values():
         for matcher in matchers:
@@ -272,3 +279,128 @@ def test_hook_events_are_logged(capsys: pytest.CaptureFixture[str]) -> None:
     assert events[-1]["event"] == "tool_denied"
     assert events[-1]["tool"] == "Bash"
     assert "rm -rf" in events[-1]["input"]
+
+
+def test_a_credential_shaped_tool_call_input_is_redacted_in_the_log() -> None:
+    import io
+    import json
+
+    from argus import telemetry
+
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    state = HookState()
+    data = hook_input("Grep", event="PostToolUse", tool_input={"pattern": "ghp_abcdefghijkl1234"})
+    asyncio.run(audit_tool_call(state)(data, None, {"signal": None}))
+
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert events[-1]["event"] == "tool_call"
+    assert "ghp_abcdefghijkl1234" not in events[-1]["input"]
+    assert "[redacted]" in events[-1]["input"]
+
+
+def test_a_credential_shaped_denied_tool_input_is_redacted_in_the_log() -> None:
+    import io
+    import json
+
+    from argus import telemetry
+
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    state = HookState()
+    data = hook_input(
+        "Bash", tool_input={"command": "curl -H 'Authorization: ghp_abcdefghijkl1234'"}
+    )
+    asyncio.run(deny_mutating_tools(state)(data, None, {"signal": None}))
+
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert events[-1]["event"] == "tool_denied"
+    assert "ghp_abcdefghijkl1234" not in events[-1]["input"]
+    assert "[redacted]" in events[-1]["input"]
+
+
+class RecorderSpy:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def on_tool_start(self, data):
+        self.calls.append(("start", data["tool_use_id"]))
+
+    def on_tool_end(self, data, error=None):
+        self.calls.append(("end", data["tool_use_id"], error))
+
+    def on_tool_denied(self, data, reason):
+        self.calls.append(("denied", data["tool_use_id"]))
+
+    def on_subagent_start(self, data):
+        self.calls.append(("subagent", data["agent_id"]))
+
+
+def test_hooks_feed_the_recorder_when_one_is_attached() -> None:
+    state = HookState(read_budget=0)
+    state.recorder = RecorderSpy()
+    hooks = build_hooks(state)
+    ctx = {"signal": None}
+    observe = hooks["PreToolUse"][-1].hooks[0]
+
+    asyncio.run(observe(hook_input("Grep", tool_use_id="tu-1"), None, ctx))
+    asyncio.run(
+        hooks["PostToolUse"][0].hooks[0](
+            hook_input("Grep", "PostToolUse", tool_use_id="tu-1"), None, ctx
+        )
+    )
+    asyncio.run(
+        hooks["PostToolUseFailure"][0].hooks[0](
+            hook_input("Read", "PostToolUseFailure", tool_use_id="tu-2", error="boom"), None, ctx
+        )
+    )
+    asyncio.run(deny_mutating_tools(state)(hook_input("Bash", tool_use_id="tu-3"), None, ctx))
+    asyncio.run(limit_lead_reading(state)(hook_input("Read", tool_use_id="tu-4"), None, ctx))
+    asyncio.run(
+        hooks["SubagentStart"][0].hooks[0](
+            {"hook_event_name": "SubagentStart", "agent_id": "ag-1", "agent_type": "security"},
+            None,
+            ctx,
+        )
+    )
+
+    assert state.recorder.calls == [
+        ("start", "tu-1"),
+        ("end", "tu-1", None),
+        ("end", "tu-2", "boom"),
+        ("denied", "tu-3"),
+        ("denied", "tu-4"),
+        ("subagent", "ag-1"),
+    ]
+
+
+def test_hooks_run_without_a_recorder() -> None:
+    state = HookState()
+    observe = build_hooks(state)["PreToolUse"][-1].hooks[0]
+
+    assert asyncio.run(observe(hook_input("Grep"), None, {"signal": None})) == {}
+
+
+def test_a_denial_still_comes_back_even_if_the_recorder_is_broken(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tracing is best-effort; a broken recorder must never swallow a real deny."""
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(trace_module, "tracer", boom)
+    state = HookState(read_budget=1)
+    state.recorder = TraceRecorder()  # a real recorder, its internals now broken
+
+    out = asyncio.run(deny_mutating_tools(state)(hook_input("Bash"), None, {"signal": None}))
+    specific = out["hookSpecificOutput"]
+    assert specific["permissionDecision"] == "deny"
+    assert "read-only" in specific["permissionDecisionReason"]
+
+    hook = limit_lead_reading(state)
+    asyncio.run(hook(hook_input("Read"), None, {"signal": None}))  # spends the one read
+    past_budget = asyncio.run(hook(hook_input("Read"), None, {"signal": None}))
+    specific2 = past_budget["hookSpecificOutput"]
+    assert specific2["permissionDecision"] == "deny"
+    assert "specialists" in specific2["permissionDecisionReason"]

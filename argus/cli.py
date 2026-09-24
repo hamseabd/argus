@@ -8,7 +8,7 @@ from typing import Annotated, NoReturn
 import typer
 from pydantic import ValidationError
 
-from argus import __version__, telemetry
+from argus import __version__, telemetry, tracing
 from argus.auth import credential_problem, credential_source
 from argus.context.git import head_sha, local_context, repo_root
 from argus.context.github import GitHubClient, parse_repo, pr_context, repo_from_remote
@@ -93,34 +93,35 @@ def review(
     _check_credentials()
     github = _github_target(pr, repo) if pr is not None else None
 
-    from argus.agent.review import SdkReviewAgent  # keep the SDK import lazy
+    with tracing.session():
+        from argus.agent.review import SdkReviewAgent  # keep the SDK import lazy
 
-    try:
-        if github is None:
-            context = local_context(Path.cwd(), base, settings.diff_size_cap)
-        else:
-            client, owner, name = github
-            root = repo_root(Path.cwd())
-            context = pr_context(client, owner, name, pr, root, settings.diff_size_cap)
-            _warn_on_head_mismatch(context)
-        if not context.files and not context.diff_text.strip():
-            _fail("nothing to review: the diff is empty")
-        result = asyncio.run(
-            run_review(
-                context,
-                SdkReviewAgent(settings),
-                verify=not no_verify,
-                verify_concurrency=settings.verify_concurrency,
-                run_id=run_id,
+        try:
+            if github is None:
+                context = local_context(Path.cwd(), base, settings.diff_size_cap)
+            else:
+                client, owner, name = github
+                root = repo_root(Path.cwd())
+                context = pr_context(client, owner, name, pr, root, settings.diff_size_cap)
+                _warn_on_head_mismatch(context)
+            if not context.files and not context.diff_text.strip():
+                _fail("nothing to review: the diff is empty")
+            result = asyncio.run(
+                run_review(
+                    context,
+                    SdkReviewAgent(settings),
+                    verify=not no_verify,
+                    verify_concurrency=settings.verify_concurrency,
+                    run_id=run_id,
+                )
             )
-        )
-    except ArgusError as exc:
-        _fail(str(exc))
-    if json_path is not None:
-        _write_json(json_path, result)
-    typer.echo(render_report(result), nl=False)
-    if post and github is not None:
-        _post_review(github[0], context, result)
+        except ArgusError as exc:
+            _fail(str(exc))
+        if json_path is not None:
+            _write_json(json_path, result)
+        typer.echo(render_report(result), nl=False)
+        if post and github is not None:
+            _post_review(github[0], context, result)
     if fail_on is not None and gate_tripped(result.review.findings, fail_on):
         raise typer.Exit(EXIT_GATE)
 

@@ -1,10 +1,11 @@
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from argus import cli
+from argus import cli, tracing
 from argus.domain.errors import AgentRunError
 from argus.domain.models import (
     ChangedFile,
@@ -221,3 +222,37 @@ def test_an_empty_diff_fails_before_any_query(stubbed: dict) -> None:
     assert result.exit_code == 1
     assert "nothing to review" in result.output
     assert "agent" not in stubbed
+
+
+@pytest.fixture
+def sessions(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    events: list[str] = []
+
+    @contextmanager
+    def fake_session(environ=None):
+        events.append("in")
+        try:
+            yield False
+        finally:
+            events.append("out")
+
+    monkeypatch.setattr(tracing, "session", fake_session)
+    return events
+
+
+def test_the_review_runs_inside_a_tracing_session(stubbed: dict, sessions: list[str]) -> None:
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert sessions == ["in", "out"]
+
+
+def test_a_failed_review_still_closes_the_tracing_session(
+    stubbed: dict, sessions: list[str]
+) -> None:
+    stubbed["outcome"] = AgentRunError("error_max_budget_usd", 3.0, "sess")
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 1
+    assert sessions == ["in", "out"]

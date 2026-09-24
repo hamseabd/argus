@@ -107,11 +107,32 @@ def test_review_step_uses_only_the_subscription_token_and_posts_with_an_artifact
         s for s in steps("review.yml", "review") if "upload-artifact@" in s.get("uses", "")
     )
 
-    assert set(review["env"]) == {"CLAUDE_CODE_OAUTH_TOKEN", "GITHUB_TOKEN", "ARGUS_LOG_FORMAT"}
+    assert set(review["env"]) == {
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "GITHUB_TOKEN",
+        "ARGUS_LOG_FORMAT",
+        "LANGSMITH_API_KEY",
+    }
     assert review["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
     assert "--post" in review["run"] and "--json" in review["run"]
     assert upload["if"] == "always()"
     assert upload["with"]["path"] == "argus-review.json"
+
+
+def test_tracing_is_optional_for_callers_and_off_without_the_key() -> None:
+    call = load("review.yml")["on"]["workflow_call"]
+    review = next(s for s in steps("review.yml", "review") if s.get("name") == "Review")
+
+    assert call["secrets"]["LANGSMITH_API_KEY"]["required"] is False
+    assert review["env"]["LANGSMITH_API_KEY"] == "${{ secrets.LANGSMITH_API_KEY }}"
+    guard = 'if [ -n "$LANGSMITH_API_KEY" ]; then'
+    run = review["run"]
+    assert guard in run
+    before, _, after = run.partition(guard)
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in before
+    inside, _, _ = after.partition("fi\n")
+    assert "export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.smith.langchain.com/otel" in inside
+    assert 'export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=$LANGSMITH_API_KEY' in inside
 
 
 def test_the_review_is_posted_as_the_argus_app() -> None:
