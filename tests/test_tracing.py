@@ -89,6 +89,14 @@ def test_meta_redacts_string_values_but_leaves_other_types_alone() -> None:
     assert attrs["langsmith.metadata.n"] == 3
 
 
+def test_clean_redacts_strings_and_leaves_other_types_alone() -> None:
+    attrs = tracing.clean({"token": "ghp_abcdefghijkl1234", "n": 3, "ok": True})
+    assert "ghp_abcdefghijkl1234" not in attrs["token"]
+    assert "[redacted]" in attrs["token"]
+    assert attrs["n"] == 3
+    assert attrs["ok"] is True
+
+
 def test_span_redacts_the_display_name_and_string_attributes(spans) -> None:
     with tracing.span(
         "x",

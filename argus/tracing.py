@@ -54,17 +54,23 @@ def redact(text: str, limit: int = MAX_ATTRIBUTE_CHARS) -> str:
     return cleaned if len(cleaned) <= limit else cleaned[: limit - 3] + "..."
 
 
+def clean(attributes: Mapping[str, AttributeValue]) -> dict[str, AttributeValue]:
+    """A copy of attributes with every str value passed through redact(); other types untouched.
+
+    The one place that decides whether a value is credential-shaped, so every
+    caller that builds attributes for a span shares the same rule.
+    """
+    return {k: redact(v) if isinstance(v, str) else v for k, v in attributes.items()}
+
+
 def meta(**values: object) -> dict[str, AttributeValue]:
     """Attributes LangSmith would otherwise drop, under its metadata prefix; None is skipped.
 
     Every string value passes through redact() so no credential-shaped text
     reaches a span by way of metadata; other types are passed through as-is.
     """
-    return {
-        f"{METADATA}{k}": redact(v) if isinstance(v, str) else v  # type: ignore[misc]
-        for k, v in values.items()
-        if v is not None
-    }
+    present: dict[str, AttributeValue] = {k: v for k, v in values.items() if v is not None}  # type: ignore[misc]
+    return {f"{METADATA}{k}": v for k, v in clean(present).items()}
 
 
 def stage_attributes(metrics: StageMetrics) -> dict[str, AttributeValue]:
@@ -105,7 +111,7 @@ def span(
     """The current span for a block. Errors are recorded redacted, never as raw exception events."""
     attrs: dict[str, AttributeValue] = {
         KIND: kind,
-        **{k: redact(v) if isinstance(v, str) else v for k, v in (attributes or {}).items()},
+        **clean(attributes or {}),
     }
     if display is not None:
         attrs[NAME] = redact(display)
