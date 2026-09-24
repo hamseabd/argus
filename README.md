@@ -159,7 +159,10 @@ Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` en
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` (and `OTEL_EXPORTER_OTLP_HEADERS` for auth) and a review is exported as one OpenTelemetry trace; unset, nothing is exported.
 Argus builds the spans itself from the SDK's message stream and hooks and turns Claude Code's native telemetry off, because the native spans carry the account's email and ids, and a backend that keeps only the attributes it maps (LangSmith) shows them without tool names or tokens.
-Spans follow the `gen_ai` conventions plus LangSmith's keys; tool inputs are summarized and redacted as in the logs, and prompts, output, and model text are only included with `ARGUS_TRACE_CONTENT=true`.
+Spans follow the `gen_ai` conventions plus LangSmith's keys; tool inputs are summarized and redacted as in the logs.
+By default no prompt, diff, or model text leaves the machine.
+`ARGUS_TRACE_CONTENT=true` adds the prompt, which contains the diff under review, the structured output, and the model's text to the spans, and sends them to your backend.
+Redaction strips only the token formats Argus knows (Claude, GitHub, and LangSmith credentials), not every secret a diff can hold, so enable it only for code you are willing to send there.
 `LANGSMITH_API_KEY` is your LangSmith API key; set it first.
 
 ```bash
