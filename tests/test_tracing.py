@@ -231,7 +231,11 @@ def test_span_marks_errors_redacted_with_their_cost(spans) -> None:
     assert "ghp_abcdefghijkl" not in s.status.description
     assert s.status.description.startswith("AgentRunError")
     assert s.attributes["langsmith.metadata.cost_usd"] == 0.25
-    assert s.events == ()  # no raw exception event carrying the unredacted message
+    (event,) = s.events  # LangSmith marks a run failed only from an exception event
+    assert event.name == "exception"
+    assert event.attributes["exception.type"] == "AgentRunError"
+    assert "ghp_abcdefghijkl" not in event.attributes["exception.message"]
+    assert "exception.stacktrace" not in event.attributes
 
 
 def test_exporter_warnings_become_structured_log_events(monkeypatch) -> None:
