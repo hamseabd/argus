@@ -26,6 +26,7 @@ def test_importing_the_non_agent_modules_does_not_load_the_sdk() -> None:
         "argus.context.git",
         "argus.settings",
         "argus.telemetry",
+        "argus.tracing",
         "argus.cli",
     ]
     code = (

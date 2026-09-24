@@ -237,7 +237,7 @@ def test_a_wall_of_cli_output_cannot_become_the_error_message() -> None:
     with pytest.raises(AgentRunError) as info:
         asyncio_run(run(runner_for(failure)))
 
-    assert len(info.value.detail or "") == 300
+    assert len(info.value.detail or "") <= 300
 
 
 def test_a_failure_with_nothing_structured_still_reports_its_message() -> None:

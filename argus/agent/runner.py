@@ -8,7 +8,6 @@ that ends without a result, and an exception raised by the SDK itself
 (which is how a budget overrun surfaces).
 """
 
-import re
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -27,16 +26,11 @@ from argus.agent.ledger import AgentLedger
 from argus.domain.errors import AgentRunError, ReviewProtocolError
 from argus.domain.models import StageMetrics
 from argus.telemetry import bind_run, get_logger
+from argus.tracing import redact
 
 QueryFn = Callable[..., AsyncIterator[Any]]
 
 _DETAIL_CHARS = 300
-_CREDENTIAL = re.compile(r"(sk-ant-|gh[pousr]_|github_pat_)[A-Za-z0-9_\-]{8,}")
-"""Review logs are public on a public repository; nothing token-shaped goes into one.
-
-Both credentials the review step holds are covered: the Claude subscription
-token it runs on, and the app installation token it posts with.
-"""
 
 
 @dataclass(frozen=True)
@@ -140,5 +134,5 @@ def _why(exc: ClaudeSDKError) -> str | None:
         parts.append(stderr.splitlines()[-1])
     if not parts and (text := str(exc).strip()):
         parts.append(text)
-    detail = _CREDENTIAL.sub("[redacted]", "; ".join(parts))
-    return detail[:_DETAIL_CHARS] if detail else None
+    detail = redact("; ".join(parts), _DETAIL_CHARS)
+    return detail or None
