@@ -48,6 +48,21 @@ def test_session_installs_the_provider_and_flushes_it_on_exit(
     assert shut == [True]
 
 
+def test_session_redacts_credentials_in_the_logged_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    monkeypatch.setattr(tracing.trace, "set_tracer_provider", lambda _p: None)
+
+    with tracing.session({tracing.ENDPOINT_ENV: "https://u:ghp_abcdefghijkl@127.0.0.1:9"}):
+        pass
+
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    (event,) = [e for e in events if e["event"] == "tracing_enabled"]
+    assert "ghp_abcdefghijkl" not in event["endpoint"]
+
+
 @pytest.mark.parametrize(
     "secret",
     ["sk-ant-oat01-abcdefghij", "ghp_abcdefghijkl", "ghs_abcdefghijkl", "github_pat_abcdefghij"],

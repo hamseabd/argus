@@ -132,7 +132,7 @@ def session(environ: Mapping[str, str] = os.environ) -> Iterator[bool]:
     otel_logger = logging.getLogger("opentelemetry")
     otel_logger.addHandler(bridge)
     otel_logger.propagate = False
-    get_logger().info("tracing_enabled", endpoint=environ[ENDPOINT_ENV])
+    get_logger().info("tracing_enabled", endpoint=redact(environ[ENDPOINT_ENV]))
     try:
         yield True
     finally:
