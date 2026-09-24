@@ -7,7 +7,7 @@ license = "MIT"
 requires-python = ">=3.12"
 authors = [{ name = "Hamse Abdi", email = "hmseabd@gmail.com" }]
 dependencies = [
-    "claude-agent-sdk>=0.2.152",
+    "claude-agent-sdk>=0.2.157",
     "httpx>=0.28",
     "opentelemetry-api>=1.44.0",
     "opentelemetry-exporter-otlp-proto-http>=1.44.0",
@@ -27,7 +27,7 @@ dev = [
     "pytest>=8.4",
     "pyyaml>=6",
     "respx>=0.22",
-    "ruff>=0.16.7",
+    "ruff>=0.16.8",
 ]
 
 [build-system]
