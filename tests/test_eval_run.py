@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 import argus.agent.review
 import evals.run
-from argus.domain.errors import AgentRunError
+from argus.domain.errors import AgentRunError, GitError
 from argus.domain.models import Finding, Review, ReviewContext, StageMetrics, Verdict
 from argus.pipeline import StageOutcome
 from evals.corpus import Case, load_cases
@@ -130,6 +130,21 @@ def test_a_failed_review_is_scored_as_missed_with_its_cost_and_the_run_goes_on(
     case = record["modes"]["verify"]["cases"][0]
     assert case["result"] is None
     assert "error_max_budget_usd" in case["score"]["error"]
+
+
+class UnpaidFailureAgent(OracleAgent):
+    async def review(self, context: ReviewContext) -> StageOutcome[Review]:
+        raise GitError("git diff failed")
+
+
+def test_a_failure_that_spent_nothing_is_scored_at_zero_cost(tmp_path: Path) -> None:
+    paths = run(UnpaidFailureAgent(), ["sqli"], ["verify"], tmp_path)
+
+    record = json.loads(paths.json.read_text())
+    (case,) = record["modes"]["verify"]["cases"]
+    assert case["score"]["cost_usd"] == 0.0
+    assert case["score"]["error"] == "git diff failed"
+    assert record["modes"]["verify"]["summary"]["total_cost_usd"] == 0.0
 
 
 def test_a_case_whose_repository_cannot_be_built_is_scored_as_failed_and_the_run_goes_on(
