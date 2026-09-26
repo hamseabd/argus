@@ -1,0 +1,60 @@
+name: argus-eval
+
+# Scores Argus over the seeded-bug corpus in evals/cases: seven seeded bugs
+# and three clean controls, reviewed in verify and no-verify modes, for
+# precision, recall, the clean-control false-positive rate, verifier
+# accuracy, and cost, turns, and latency per review.
+#
+# On demand only: a full run is twenty reviews against the subscription, so
+# no push or pull request ever starts one. The record (every ReviewResult
+# plus the table) is kept as an artifact and the table goes on the run's
+# summary page; commit it under evals/results/ to cite it.
+#
+# Nothing is posted anywhere and no GitHub token is needed: each case is a
+# local git repository built in a temporary directory.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Which pipeline modes to run
+        required: true
+        default: both
+        type: choice
+        options: [both, verify, no-verify]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: argus-eval
+  cancel-in-progress: false # a cancelled run has already spent its quota
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    # About five minutes a review, twenty reviews for both modes.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: Evaluate
+        run: |
+          args=()
+          if [ "$EVAL_MODE" != both ]; then args=(--mode "$EVAL_MODE"); fi
+          uv run python -m evals.run "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ARGUS_LOG_FORMAT: json
+          EVAL_MODE: ${{ inputs.mode }}
+      - name: Keep the eval record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: argus-eval
+          path: evals/results/
+          if-no-files-found: ignore
