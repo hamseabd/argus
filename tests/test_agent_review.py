@@ -185,3 +185,25 @@ def test_review_warns_when_fewer_than_three_specialists_ran(tmp_path: Path) -> N
     warning = next(e for e in events if e["event"] == "specialists_missing")
     assert warning["expected"] == 3
     assert warning["ran"] == 0
+
+
+def test_the_answer_hold_limit_setting_reaches_the_lead_s_hooks(tmp_path: Path) -> None:
+    decisions: list[bool] = []
+
+    async def query(*, prompt: str, options: ClaudeAgentOptions):
+        ctx = {"signal": None}
+        start = {"hook_event_name": "SubagentStart", "agent_id": "a-1", "agent_type": "security"}
+        await options.hooks["SubagentStart"][0].hooks[0](start, None, ctx)
+        answer = {"hook_event_name": "PreToolUse", "tool_name": "StructuredOutput"}
+        hold = next(m for m in options.hooks["PreToolUse"] if m.matcher == "StructuredOutput")
+        for _ in range(3):
+            decisions.append(bool(await hold.hooks[0](answer, None, ctx)))
+        yield result({"summary": "s", "files_reviewed": [], "findings": []})
+
+    settings = Settings(_env_file=None, lead_max_answer_holds=1)
+    outcome = asyncio.run(
+        SdkReviewAgent(settings, runner=SdkRunner(query_fn=query)).review(context(tmp_path))
+    )
+
+    assert decisions == [True, False, False]
+    assert outcome.metrics.answers_held == 1

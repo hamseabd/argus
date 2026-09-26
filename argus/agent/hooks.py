@@ -23,6 +23,7 @@ from claude_agent_sdk import HookContext, HookMatcher
 from claude_agent_sdk.types import HookEvent
 
 from argus.agent.tools import GIT_HISTORY_TOOL_NAME
+from argus.settings import DEFAULT_ANSWER_HOLDS
 from argus.telemetry import get_logger
 from argus.tracing import redact, summarize
 
@@ -83,7 +84,11 @@ class HookState:
     reads_denied: int = 0
     running: dict[str, str] = field(default_factory=dict)
     """Subagents started and not yet stopped: agent_id to agent type."""
+    finished: list[str] = field(default_factory=list)
+    """Subagent types that stopped since the lead's answer was last held."""
     answers_held: int = 0
+    answer_hold_limit: int = DEFAULT_ANSWER_HOLDS
+    """Holds after which the answer goes through regardless, so a hold cannot last forever."""
     accepted_answer: Any = None
     """The lead's last structured output the SDK accepted; the runner falls back to it."""
     clock: Callable[[], float] = time.monotonic
@@ -123,25 +128,51 @@ def deny_mutating_tools(state: HookState) -> Hook:
 
 
 def await_specialists(state: HookState) -> Hook:
-    """Hold the lead's answer until every specialist it started has returned.
+    """Hold the lead's answer until every specialist it started has reported.
 
-    The CLI can run a subagent in the background, so the lead's Agent call may
-    return before the specialist has reported. An answer submitted then misses
-    that specialist's findings, and its late report starts more turns that end
-    in plain text, which fails the run. The answer is refused, naming who is
-    still running, until the last one stops.
+    The CLI runs the specialists in the background, so the lead's Agent call
+    returns before the specialist has reported. An answer submitted then
+    misses that specialist's findings, and its late report starts more turns
+    that end in plain text, which fails the run. So the answer is refused,
+    naming who is still running, until the last one stops, and then once
+    more: SubagentStop fires before the report reaches the lead, so an answer
+    right after it can still predate the findings. Holds are bounded by
+    answer_hold_limit; past it the answer goes through, and the runner's
+    recovery of the accepted answer covers what follows.
     """
 
     async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
-        if data.get("agent_id") or not state.running:
+        if data.get("agent_id"):
             return {}
-        waiting = sorted(set(state.running.values()))
+        log = get_logger()
+        if not state.running and not state.finished:
+            if state.answers_held:
+                log.info("answer_hold_released", held=state.answers_held, reason="reported")
+            return {}
+        if state.answers_held >= state.answer_hold_limit:
+            log.warning(
+                "answer_hold_released",
+                held=state.answers_held,
+                reason="hold_limit",
+                waiting=sorted(set(state.running.values())),
+            )
+            return {}
+        if state.running:
+            waiting = sorted(set(state.running.values()))
+            reason = (
+                f"Still running: {', '.join(waiting)}. Wait for their findings, "
+                "merge them with the others, then answer with the Review."
+            )
+            log.warning("answer_held", waiting=waiting)
+        else:
+            finished = sorted(set(state.finished))
+            reason = (
+                f"{', '.join(finished)} just finished; its report may not have reached you "
+                "yet. Wait for it, merge it with the others, then answer with the Review."
+            )
+            log.warning("answer_held", finished=finished)
+        state.finished.clear()
         state.answers_held += 1
-        reason = (
-            f"Still running: {', '.join(waiting)}. Wait for their findings, "
-            "merge them with the others, then answer with the Review."
-        )
-        get_logger().warning("answer_held", waiting=waiting)
         if state.recorder is not None:
             state.recorder.on_tool_denied(data, reason)
         return {
@@ -251,7 +282,9 @@ def on_subagent_start(state: HookState) -> Hook:
 def on_subagent_stop(state: HookState) -> Hook:
     async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
         state.subagents_stopped += 1
-        state.running.pop(str(data.get("agent_id")), None)
+        if data.get("agent_id"):
+            state.running.pop(str(data["agent_id"]), None)
+            state.finished.append(str(data.get("agent_type") or "agent"))
         counters = state.agent(data)
         if counters.started_at is not None:
             counters.duration_ms = round((state.clock() - counters.started_at) * 1000)

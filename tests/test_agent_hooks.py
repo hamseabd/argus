@@ -1,8 +1,11 @@
 import asyncio
+import io
+import json
 import re
 
 import pytest
 
+from argus import telemetry
 from argus.agent import trace as trace_module
 from argus.agent.hooks import (
     ALLOWED_TOOLS,
@@ -14,6 +17,7 @@ from argus.agent.hooks import (
     STRUCTURED_OUTPUT_TOOL,
     HookState,
     audit_tool_call,
+    await_specialists,
     build_hooks,
     deny_mutating_tools,
     limit_lead_reading,
@@ -461,6 +465,11 @@ def test_the_lead_cannot_answer_while_a_specialist_is_still_running() -> None:
             ctx,
         )
     )
+    # SubagentStop fires before the report reaches the lead: one more round for it.
+    (last_round,) = [o for o in pre_tool(answer) if o]
+    assert "security" in last_round["hookSpecificOutput"]["permissionDecisionReason"]
+    assert state.answers_held == 2
+
     assert [o for o in pre_tool(answer) if o] == []
 
 
@@ -535,3 +544,72 @@ def test_a_rejected_answer_is_never_kept() -> None:
     )
 
     assert state.accepted_answer is None
+
+
+def _answer() -> dict:
+    return {
+        "hook_event_name": "PreToolUse",
+        "tool_name": STRUCTURED_OUTPUT_TOOL,
+        "tool_use_id": "so-1",
+        "tool_input": {},
+    }
+
+
+def _subagent(hooks, event: str, agent_id: str, agent_type: str) -> None:
+    data = {"hook_event_name": event, "agent_id": agent_id, "agent_type": agent_type}
+    asyncio.run(hooks[event][0].hooks[0](data, None, {"signal": None}))
+
+
+def _held(state: HookState) -> bool:
+    return bool(asyncio.run(await_specialists(state)(_answer(), None, {"signal": None})))
+
+
+def test_the_answer_is_held_one_round_after_the_last_specialist_stops() -> None:
+    state = HookState()
+    hooks = build_hooks(state)
+    _subagent(hooks, "SubagentStart", "a-1", "correctness")
+    _subagent(hooks, "SubagentStop", "a-1", "correctness")
+
+    assert _held(state) is True
+    assert _held(state) is False
+    assert state.answers_held == 1
+
+
+def test_holds_are_bounded_so_a_stuck_specialist_cannot_hold_the_answer_forever() -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    state = HookState(answer_hold_limit=2)
+    hooks = build_hooks(state)
+    _subagent(hooks, "SubagentStart", "a-1", "quality")
+
+    assert [_held(state) for _ in range(3)] == [True, True, False]
+    assert state.answers_held == 2
+    records = [json.loads(line) for line in stream.getvalue().splitlines()]
+    (released,) = [r for r in records if r["event"] == "answer_hold_released"]
+    assert released["held"] == 2
+    assert released["reason"] == "hold_limit"
+
+
+def test_a_release_after_the_specialists_report_is_logged_with_the_count() -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    state = HookState()
+    hooks = build_hooks(state)
+    _subagent(hooks, "SubagentStart", "a-1", "security")
+    assert _held(state) is True
+    _subagent(hooks, "SubagentStop", "a-1", "security")
+    assert _held(state) is True
+    assert _held(state) is False
+
+    records = [json.loads(line) for line in stream.getvalue().splitlines()]
+    (released,) = [r for r in records if r["event"] == "answer_hold_released"]
+    assert released["held"] == 2
+    assert released["reason"] == "reported"
+
+
+def test_a_hold_limit_of_zero_never_holds() -> None:
+    state = HookState(answer_hold_limit=0)
+    hooks = build_hooks(state)
+    _subagent(hooks, "SubagentStart", "a-1", "security")
+
+    assert _held(state) is False

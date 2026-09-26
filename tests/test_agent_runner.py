@@ -65,7 +65,7 @@ async def run(runner: SdkRunner, state: HookState | None = None) -> RunResult:
 
 
 def test_success_returns_structured_output_and_metrics() -> None:
-    state = HookState(subagents_started=3, output_rejections=2)
+    state = HookState(subagents_started=3, output_rejections=2, answers_held=1)
     out = asyncio_run(
         run(runner_for([AssistantMessage(content=[TextBlock("hi")], model="m"), result()]), state)
     )
@@ -84,6 +84,7 @@ def test_success_returns_structured_output_and_metrics() -> None:
     assert m.duration_ms == 1200
     assert m.subagents_run == 3
     assert m.output_rejections == 2
+    assert m.answers_held == 1
 
 
 def test_metrics_attribute_turns_and_tokens_to_the_lead_and_each_specialist() -> None:
@@ -570,10 +571,17 @@ def test_a_late_specialist_report_after_the_answer_still_yields_the_review() -> 
             # Returns in the same millisecond: the specialist runs in the background.
             ("PostToolUse", 0, agent_call("PostToolUse", f"tu-{kind}", kind)),
         ]
-    script += [("SubagentStop", 0, sub("SubagentStop", aid, k)) for aid, k in specialists]
     script += [
+        ("SubagentStop", 0, sub("SubagentStop", "a-s", "security")),
+        # Held: correctness and quality are still running.
         ("PreToolUse", 2, answer("PreToolUse", "so-1")),
-        ("PostToolUse", 0, answer("PostToolUse", "so-1")),
+        ("SubagentStop", 0, sub("SubagentStop", "a-c", "correctness")),
+        ("SubagentStop", 0, sub("SubagentStop", "a-q", "quality")),
+        # Held once more: the stops fire before the reports reach the lead.
+        ("PreToolUse", 2, answer("PreToolUse", "so-2")),
+        # Released, and accepted by the SDK.
+        ("PreToolUse", 2, answer("PreToolUse", "so-3")),
+        ("PostToolUse", 0, answer("PostToolUse", "so-3")),
         # The late report arrives and the lead's next turn ends in plain text.
         AssistantMessage(
             content=[TextBlock("The correctness report agrees with my review.")],
@@ -589,5 +597,6 @@ def test_a_late_specialist_report_after_the_answer_still_yields_the_review() -> 
 
     assert Review.model_validate(out.structured_output).summary == REVIEW["summary"]
     assert out.metrics.structured_output_recovered is True
+    assert out.metrics.answers_held == 2
     assert "run_failed" not in [e["event"] for e in events(stream)]
     assert "structured_output_recovered" in [e["event"] for e in events(stream)]

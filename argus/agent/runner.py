@@ -152,6 +152,7 @@ class SdkRunner:
             duration_ms=result.duration_ms,
             subagents_run=state.subagents_started,
             output_rejections=state.output_rejections,
+            answers_held=state.answers_held,
             structured_output_recovered=recovered is not None,
             agents=ledger.metrics(state),
         )

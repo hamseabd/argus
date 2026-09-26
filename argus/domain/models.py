@@ -140,6 +140,9 @@ class StageMetrics(_Model):
     output_rejections: int = Field(
         default=0, ge=0, description="Structured outputs the SDK rejected before one validated."
     )
+    answers_held: int = Field(
+        default=0, ge=0, description="Times the lead's answer was held for a specialist."
+    )
     structured_output_recovered: bool = Field(
         default=False,
         description=(
