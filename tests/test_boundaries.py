@@ -56,7 +56,7 @@ def test_the_evals_reach_the_sdk_only_through_the_agent_package() -> None:
 def test_the_package_never_prints() -> None:
     offenders = [
         path.relative_to(ROOT)
-        for path in [*PACKAGE.rglob("*.py"), *EVALS.glob("*.py")]
+        for path in [*PACKAGE.rglob("*.py"), *EVALS.rglob("*.py")]
         if any(line.lstrip().startswith("print(") for line in path.read_text().splitlines())
     ]
 
