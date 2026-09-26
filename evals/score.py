@@ -1,7 +1,8 @@
 """Score a ReviewResult against a case's seeded bugs.
 
 A finding matches a seeded bug when it names the same file and the same
-category, and its line span comes within TOLERANCE lines of the bug's span.
+category, its line span comes within TOLERANCE lines of the bug's span, and
+that span is at most MAX_SPAN lines wide, so a diffuse finding cannot claim a bug.
 A finding is *reported* unless the verifier rejected it, the same rule the
 report uses. Over the reported findings:
 
@@ -27,6 +28,9 @@ from evals.corpus import Case, ExpectedBug
 
 TOLERANCE = 3
 """Lines either side of a seeded bug's span that still count as pointing at it."""
+
+MAX_SPAN = 15
+"""The widest finding, in lines, that still localizes a bug: about one function."""
 
 
 class _Model(BaseModel):
@@ -86,10 +90,12 @@ class Summary(_Model):
 
 
 def matches(finding: Finding, bug: ExpectedBug, tolerance: int = TOLERANCE) -> bool:
-    """Same file, same category, and the finding's span within tolerance of the bug's."""
+    """Same file, same category, and a narrow finding span within tolerance of the bug's."""
     if finding.file != bug.file or finding.category != bug.category:
         return False
     end = finding.end_line or finding.line
+    if end - finding.line + 1 > MAX_SPAN:
+        return False
     return finding.line <= bug.line_end + tolerance and end >= bug.line_start - tolerance
 
 

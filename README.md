@@ -172,7 +172,7 @@ The runner builds the same layout the live test uses, `main` holding the base an
 | `clean_correct_fix` | empty-input guards and an even-length median fix | none expected |
 
 **The scoring** ([`evals/score.py`](evals/score.py)).
-A finding matches a seeded bug when it names the same file and category and its line span comes within three lines of the bug's.
+A finding matches a seeded bug when it names the same file and category and its line span, at most 15 lines wide, comes within three lines of the bug's.
 A finding counts as reported unless the verifier rejected it, the same rule the report uses.
 Precision and recall are pooled over the corpus; a second finding on an already-matched bug is a duplicate, not a false positive.
 The clean-control false-positive rate is the share of clean controls with any reported finding.

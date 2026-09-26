@@ -7,6 +7,7 @@ import pytest
 from argus.domain.models import Finding, Review, ReviewResult, StageMetrics
 from evals.corpus import Case, ExpectedBug
 from evals.score import (
+    MAX_SPAN,
     CaseScore,
     failed_case,
     matches,
@@ -90,6 +91,16 @@ def test_a_finding_more_than_three_lines_away_does_not_match(line: int) -> None:
 
 def test_a_finding_whose_span_reaches_the_bug_matches() -> None:
     assert matches(finding("f", line=2, end_line=12), SQLI)
+
+
+def test_a_finding_as_wide_as_the_span_limit_still_matches() -> None:
+    assert matches(finding("f", line=1, end_line=MAX_SPAN), SQLI)
+
+
+def test_a_diffuse_finding_wider_than_the_span_limit_does_not_match() -> None:
+    assert MAX_SPAN == 15
+    assert not matches(finding("f", line=1, end_line=MAX_SPAN + 1), SQLI)
+    assert not matches(finding("f", line=1, end_line=200), SQLI)
 
 
 def test_a_finding_in_another_file_does_not_match() -> None:
