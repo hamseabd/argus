@@ -18,6 +18,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from argus.domain.errors import ArgusError
 from argus.domain.models import Category, Severity
 
 CASES_DIR = Path(__file__).parent / "cases"
@@ -67,16 +68,32 @@ def load_cases(root: Path = CASES_DIR) -> list[Case]:
     return cases
 
 
+class CaseBuildError(ArgusError):
+    """A case's repository could not be built: a git command or a snapshot copy failed."""
+
+
 def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+    try:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stderr or exc.stdout or "").strip()
+        raise CaseBuildError(f"git {' '.join(args)} failed: {output}") from exc
 
 
 def build_case_repo(case: Case, target: Path) -> Path:
     """A git repo whose main holds the base snapshot and whose feature branch holds the seeded one.
 
     The seeded snapshot replaces the base rather than overlaying it, so a case
-    can delete or rename a file.
+    can delete or rename a file. Any failure is a CaseBuildError, an ArgusError,
+    so the runner scores the case as failed and moves on.
     """
+    try:
+        return _build(case, target)
+    except OSError as exc:
+        raise CaseBuildError(f"case {case.name}: {exc}") from exc
+
+
+def _build(case: Case, target: Path) -> Path:
     target.mkdir(parents=True, exist_ok=True)
     _git(target, "init", "-q", "-b", "main")
     _git(target, "config", "user.email", "fixture@argus.test")

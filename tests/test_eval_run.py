@@ -13,7 +13,7 @@ import evals.run
 from argus.domain.errors import AgentRunError
 from argus.domain.models import Finding, Review, ReviewContext, StageMetrics, Verdict
 from argus.pipeline import StageOutcome
-from evals.corpus import load_cases
+from evals.corpus import Case, load_cases
 from evals.run import ResultPaths, result_label, run_eval
 
 CASES = {case.name: case for case in load_cases()}
@@ -130,6 +130,25 @@ def test_a_failed_review_is_scored_as_missed_with_its_cost_and_the_run_goes_on(
     case = record["modes"]["verify"]["cases"][0]
     assert case["result"] is None
     assert "error_max_budget_usd" in case["score"]["error"]
+
+
+def test_a_case_whose_repository_cannot_be_built_is_scored_as_failed_and_the_run_goes_on(
+    tmp_path: Path,
+) -> None:
+    missing = Case(name="missing", path=tmp_path / "no-such-case", expected=CASES["sqli"].expected)
+    cases = [missing, CASES["off_by_one"]]
+
+    paths = asyncio.run(
+        run_eval(cases, OracleAgent(), modes=["verify"], out_dir=tmp_path / "out", label="x")
+    )
+
+    record = json.loads(paths.json.read_text())
+    broken, off_by_one = record["modes"]["verify"]["cases"]
+    assert broken["result"] is None
+    assert "no-such-case" in broken["score"]["error"]
+    assert (broken["score"]["false_negatives"], broken["score"]["cost_usd"]) == (1, 0.0)
+    assert off_by_one["score"]["error"] is None
+    assert off_by_one["score"]["true_positives"] == 1
 
 
 class FakeLiveRun:

@@ -6,7 +6,7 @@ import pytest
 
 from argus.context.diff import parse_diff
 from argus.context.git import local_context, local_diff
-from evals.corpus import CASES_DIR, Case, build_case_repo, load_cases
+from evals.corpus import CASES_DIR, Case, CaseBuildError, build_case_repo, load_cases
 
 CASES = load_cases()
 SEEDED_BUGS = {
@@ -52,6 +52,24 @@ def test_load_cases_rejects_an_unknown_category(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="category"):
         load_cases(tmp_path)
+
+
+def test_a_git_failure_while_building_a_case_is_a_case_build_error(tmp_path: Path) -> None:
+    source = tmp_path / "unchanged"
+    for side in ("base", "seeded"):
+        (source / side).mkdir(parents=True)
+        (source / side / "a.py").write_text("x = 1\n")
+    case = Case(name="unchanged", path=source, expected=())
+
+    with pytest.raises(CaseBuildError, match="nothing to commit"):
+        build_case_repo(case, tmp_path / "repo")
+
+
+def test_a_case_with_no_snapshot_on_disk_is_a_case_build_error(tmp_path: Path) -> None:
+    case = Case(name="missing", path=tmp_path / "missing", expected=())
+
+    with pytest.raises(CaseBuildError, match="missing"):
+        build_case_repo(case, tmp_path / "repo")
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.name)

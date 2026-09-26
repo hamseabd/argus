@@ -63,9 +63,9 @@ async def run_case(
     with tempfile.TemporaryDirectory() as tmp:
         # A neutral directory name: the reviewer sees the repository root, and
         # a name like "sqli" would tell it what to look for.
-        repo = build_case_repo(case, Path(tmp) / "repo")
-        context = local_context(repo, base="main")
         try:
+            repo = build_case_repo(case, Path(tmp) / "repo")
+            context = local_context(repo, base="main")
             result = await run_review(
                 context, agent, verify=verify, verify_concurrency=verify_concurrency
             )
