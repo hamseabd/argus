@@ -438,3 +438,156 @@ def test_a_run_survives_a_recorder_whose_internals_are_broken(monkeypatch, spans
 
     assert out.structured_output == {"verdict": "confirmed", "reasoning": "r", "confidence": 0.9}
     assert state.recorder is None
+
+
+REVIEW = {
+    "summary": "Adds paging. The specialists found nothing that needs fixing before merge.",
+    "findings": [],
+    "files_reviewed": ["app/paging.py"],
+}
+
+
+def events(stream: io.StringIO) -> list[dict]:
+    return [json.loads(line) for line in stream.getvalue().splitlines()]
+
+
+def test_a_plain_text_end_after_an_accepted_answer_recovers_that_answer() -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    state = HookState(accepted_answer=REVIEW)
+
+    out = asyncio_run(run(runner_for([result(structured_output=None)]), state))
+
+    assert out.structured_output == REVIEW
+    assert out.metrics.structured_output_recovered is True
+    assert out.metrics.cost_usd == 0.42
+    (recovered,) = [e for e in events(stream) if e["event"] == "structured_output_recovered"]
+    assert recovered["reason"] == "no_structured_output"
+
+
+def test_a_normal_answer_is_not_marked_recovered() -> None:
+    out = asyncio_run(run(runner_for([result()]), HookState(accepted_answer=REVIEW)))
+
+    assert out.structured_output == {"verdict": "confirmed", "reasoning": "r", "confidence": 0.9}
+    assert out.metrics.structured_output_recovered is False
+
+
+def test_a_budget_overrun_after_an_accepted_answer_recovers_it() -> None:
+    state = HookState(accepted_answer=REVIEW)
+    over = result(subtype="error_max_budget_usd", is_error=True, structured_output=None)
+
+    out = asyncio_run(run(runner_for([over]), state))
+
+    assert out.structured_output == REVIEW
+    assert out.metrics.structured_output_recovered is True
+
+
+def test_a_budget_overrun_raised_by_the_sdk_recovers_the_accepted_answer() -> None:
+    """How the Sep 24 run ended: sdk_error:ResultError after $3.04: budget_exhausted."""
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    over = result(
+        subtype="error_max_budget_usd", is_error=True, structured_output=None, total_cost_usd=3.04
+    )
+    failure = ResultError(
+        "run failed",
+        data={"subtype": "error_max_budget_usd", "terminal_reason": "budget_exhausted"},
+        exit_code=1,
+    )
+
+    out = asyncio_run(run(traced_runner([over, failure]), HookState(accepted_answer=REVIEW)))
+
+    assert out.structured_output == REVIEW
+    assert out.metrics.cost_usd == 3.04
+    assert out.metrics.structured_output_recovered is True
+    (recovered,) = [e for e in events(stream) if e["event"] == "structured_output_recovered"]
+    assert recovered["reason"] == "budget_exhausted"
+
+
+def test_a_budget_overrun_without_an_accepted_answer_still_fails() -> None:
+    failure = ResultError(
+        "run failed",
+        data={"subtype": "error_max_budget_usd", "terminal_reason": "budget_exhausted"},
+        exit_code=1,
+    )
+
+    with pytest.raises(AgentRunError, match="budget_exhausted"):
+        asyncio_run(run(runner_for(failure)))
+
+
+def test_other_failures_are_never_papered_over_by_an_accepted_answer() -> None:
+    state = HookState(accepted_answer=REVIEW)
+
+    with pytest.raises(AgentRunError, match="error_max_turns"):
+        asyncio_run(run(runner_for([result(subtype="error_max_turns", is_error=True)]), state))
+    with pytest.raises(AgentRunError, match="sdk_error:ProcessError"):
+        asyncio_run(run(runner_for(ProcessError("cli died", exit_code=1)), state))
+
+
+def test_a_late_specialist_report_after_the_answer_still_yields_the_review() -> None:
+    """The Sep 24 failure, replayed: the Agent calls return at once, the lead answers,
+    the late report starts another lead turn, and that turn ends in plain text."""
+    from argus.domain.models import Review
+
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    state = HookState()
+    specialists = [("a-c", "correctness"), ("a-q", "quality"), ("a-s", "security")]
+
+    def agent_call(event: str, tool_use_id: str, kind: str) -> dict:
+        return {
+            "hook_event_name": event,
+            "tool_name": "Agent",
+            "tool_use_id": tool_use_id,
+            "tool_input": {"subagent_type": kind},
+        }
+
+    def answer(event: str, tool_use_id: str) -> dict:
+        return {
+            "hook_event_name": event,
+            "tool_name": "StructuredOutput",
+            "tool_use_id": tool_use_id,
+            "tool_input": REVIEW,
+        }
+
+    def sub(event: str, agent_id: str, kind: str) -> dict:
+        return {"hook_event_name": event, "agent_id": agent_id, "agent_type": kind}
+
+    script: list[Any] = [
+        AssistantMessage(
+            content=[
+                ToolUseBlock(id=f"tu-{k}", name="Agent", input={"subagent_type": k})
+                for _, k in specialists
+            ],
+            model="claude-opus-5",
+            message_id="m1",
+        ),
+    ]
+    for agent_id, kind in specialists:
+        script += [
+            ("PreToolUse", -1, agent_call("PreToolUse", f"tu-{kind}", kind)),
+            ("SubagentStart", 0, sub("SubagentStart", agent_id, kind)),
+            # Returns in the same millisecond: the specialist runs in the background.
+            ("PostToolUse", 0, agent_call("PostToolUse", f"tu-{kind}", kind)),
+        ]
+    script += [("SubagentStop", 0, sub("SubagentStop", aid, k)) for aid, k in specialists]
+    script += [
+        ("PreToolUse", 2, answer("PreToolUse", "so-1")),
+        ("PostToolUse", 0, answer("PostToolUse", "so-1")),
+        # The late report arrives and the lead's next turn ends in plain text.
+        AssistantMessage(
+            content=[TextBlock("The correctness report agrees with my review.")],
+            model="claude-opus-5",
+            message_id="m2",
+        ),
+        result(structured_output=None, total_cost_usd=1.9),
+    ]
+
+    out = asyncio_run(
+        traced_runner(script).run("p", hooked_options(state), stage="review", state=state)
+    )
+
+    assert Review.model_validate(out.structured_output).summary == REVIEW["summary"]
+    assert out.metrics.structured_output_recovered is True
+    assert "run_failed" not in [e["event"] for e in events(stream)]
+    assert "structured_output_recovered" in [e["event"] for e in events(stream)]

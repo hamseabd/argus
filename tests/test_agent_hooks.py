@@ -481,3 +481,57 @@ def test_the_answer_is_never_held_when_no_specialist_ran() -> None:
     ]
 
     assert all(o == {} for o in outs)
+
+
+def test_the_lead_s_accepted_answer_is_kept() -> None:
+    """A later turn can end in plain text; the accepted answer is what the runner recovers."""
+    state = HookState()
+    hook = audit_tool_call(state)
+    review = {"summary": "s", "findings": [], "files_reviewed": []}
+
+    asyncio.run(
+        hook(
+            hook_input(STRUCTURED_OUTPUT_TOOL, "PostToolUse", tool_input=review),
+            None,
+            {"signal": None},
+        )
+    )
+
+    assert state.accepted_answer == review
+
+
+def test_a_subagent_s_structured_output_is_not_the_lead_s_answer() -> None:
+    state = HookState()
+    hook = audit_tool_call(state)
+
+    asyncio.run(
+        hook(
+            hook_input(
+                STRUCTURED_OUTPUT_TOOL,
+                "PostToolUse",
+                tool_input={"x": 1},
+                agent_id="a-1",
+                agent_type="security",
+            ),
+            None,
+            {"signal": None},
+        )
+    )
+
+    assert state.accepted_answer is None
+
+
+def test_a_rejected_answer_is_never_kept() -> None:
+    state = HookState()
+    hooks = build_hooks(state)
+    failure = hooks["PostToolUseFailure"][0].hooks[0]
+
+    asyncio.run(
+        failure(
+            hook_input(STRUCTURED_OUTPUT_TOOL, "PostToolUseFailure", tool_input={"summary": "x"}),
+            None,
+            {"signal": None},
+        )
+    )
+
+    assert state.accepted_answer is None

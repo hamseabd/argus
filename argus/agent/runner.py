@@ -7,6 +7,11 @@ under a success subtype, a success with no structured output, a stream
 that ends without a result, and an exception raised by the SDK itself
 (which is how a budget overrun surfaces).
 
+One exception: when the query ends in plain text or over its budget after
+the SDK already accepted an answer, that answer is returned instead, logged
+as structured_output_recovered and flagged in the metrics. A specialist that
+reports after the lead has answered causes exactly that ending.
+
 It also attaches a TraceRecorder to the hook state for the length of the
 query, so the stream and the hooks build one span tree.
 """
@@ -37,6 +42,8 @@ from argus.tracing import meta, redact
 QueryFn = Callable[..., AsyncIterator[Any]]
 
 _DETAIL_CHARS = 300
+_BUDGET_SUBTYPE = "error_max_budget_usd"
+_BUDGET_REASON = "budget_exhausted"
 
 
 @dataclass(frozen=True)
@@ -94,24 +101,36 @@ class SdkRunner:
                             resets_at=info.resets_at,
                         )
             except ClaudeSDKError as exc:
-                raise AgentRunError(
-                    subtype=f"sdk_error:{type(exc).__name__}",
-                    cost_usd=result.total_cost_usd or 0.0 if result else 0.0,
-                    session_id=result.session_id if result else None,
-                    detail=_why(exc),
-                ) from exc
+                if not (_budget_exhausted(exc) and result and state.accepted_answer is not None):
+                    raise AgentRunError(
+                        subtype=f"sdk_error:{type(exc).__name__}",
+                        cost_usd=result.total_cost_usd or 0.0 if result else 0.0,
+                        session_id=result.session_id if result else None,
+                        detail=_why(exc),
+                    ) from exc
         finally:
             state.recorder = None
             recorder.close()
         if result is None:
             raise ReviewProtocolError(f"{stage}: the query ended without a result message")
         cost = result.total_cost_usd or 0.0
-        if result.subtype != "success" or result.is_error:
+        output = result.structured_output
+        recovered = _recovery_reason(result, state)
+        if recovered:
+            output = state.accepted_answer
+            log.warning(
+                "structured_output_recovered",
+                stage=stage,
+                reason=recovered,
+                subtype=result.subtype,
+                cost_usd=cost,
+            )
+        elif result.subtype != "success" or result.is_error:
             subtype = result.subtype
             if subtype == "success":
                 subtype = f"api_error:{result.api_error_status}"
             raise AgentRunError(subtype=subtype, cost_usd=cost, session_id=result.session_id)
-        if result.structured_output is None:
+        elif output is None:
             raise ReviewProtocolError(
                 f"{stage}: the query succeeded but returned no structured output",
                 cost_usd=cost,
@@ -119,9 +138,7 @@ class SdkRunner:
             )
         stage_span.set_attributes(meta(session_id=result.session_id))
         if self._trace_content:
-            stage_span.set_attribute(
-                "output.value", redact(json.dumps(result.structured_output, sort_keys=True))
-            )
+            stage_span.set_attribute("output.value", redact(json.dumps(output, sort_keys=True)))
         usage = result.usage or {}
         metrics = StageMetrics(
             stage=stage,
@@ -135,14 +152,41 @@ class SdkRunner:
             duration_ms=result.duration_ms,
             subagents_run=state.subagents_started,
             output_rejections=state.output_rejections,
+            structured_output_recovered=recovered is not None,
             agents=ledger.metrics(state),
         )
         log.info("stage_end", **metrics.model_dump())
         return RunResult(
-            structured_output=result.structured_output,
+            structured_output=output,
             metrics=metrics,
             session_id=result.session_id,
         )
+
+
+def _recovery_reason(result: ResultMessage, state: HookState) -> str | None:
+    """Why the accepted answer stands in for the result's, or None when it must not.
+
+    A specialist the CLI ran in the background can report after the lead has
+    answered. The report starts another lead turn, and that turn can end in
+    plain text or run the query over its budget, which drops the answer the
+    SDK already accepted. Only those two endings are recovered; any other
+    failure still fails the run, and so does a run that never had an answer.
+    """
+    if state.accepted_answer is None:
+        return None
+    if result.subtype == _BUDGET_SUBTYPE:
+        return _BUDGET_REASON
+    if result.subtype == "success" and not result.is_error and result.structured_output is None:
+        return "no_structured_output"
+    return None
+
+
+def _budget_exhausted(exc: ClaudeSDKError) -> bool:
+    """Whether the SDK raised because the query spent its max_budget_usd."""
+    return (
+        getattr(exc, "subtype", None) == _BUDGET_SUBTYPE
+        or getattr(exc, "terminal_reason", None) == _BUDGET_REASON
+    )
 
 
 def _why(exc: ClaudeSDKError) -> str | None:

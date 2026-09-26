@@ -6,7 +6,8 @@ a reason the model can read, so it does not retry. The other hooks only
 observe: they log every tool call, count subagent starts so the pipeline
 can tell whether the lead delegated as instructed, count rejected
 structured outputs so a review that only validated after several attempts
-is visible in the metrics, and keep per-agent tallies, since inside a
+is visible in the metrics, keep the lead's last accepted answer so a run
+whose final turn ends in plain text can still return it, and keep per-agent tallies, since inside a
 subagent the tool hooks carry that subagent's id and type.
 
 When a TraceRecorder is attached, the same hooks feed it the start, end,
@@ -83,6 +84,8 @@ class HookState:
     running: dict[str, str] = field(default_factory=dict)
     """Subagents started and not yet stopped: agent_id to agent type."""
     answers_held: int = 0
+    accepted_answer: Any = None
+    """The lead's last structured output the SDK accepted; the runner falls back to it."""
     clock: Callable[[], float] = time.monotonic
     recorder: "TraceRecorder | None" = None
     """Builds the query's spans; attached by the runner for the length of one query."""
@@ -201,6 +204,10 @@ def audit_tool_call(state: HookState) -> Hook:
     async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
         state.tool_calls += 1
         state.agent(data).tool_calls += 1
+        if data.get("tool_name") == STRUCTURED_OUTPUT_TOOL and not data.get("agent_id"):
+            # PostToolUse fires only once the SDK has validated the answer; a
+            # rejected one goes to PostToolUseFailure instead.
+            state.accepted_answer = data.get("tool_input")
         get_logger().info(
             "tool_call", tool=data.get("tool_name"), input=summarize(data.get("tool_input"))
         )
