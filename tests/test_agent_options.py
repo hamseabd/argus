@@ -61,7 +61,7 @@ def test_specialists_are_read_only_sonnet_agents() -> None:
         assert agent.model == "claude-sonnet-5"
         assert agent.effort == "medium"
         assert agent.maxTurns == 25
-        assert agent.background is False  # the lead's Agent call returns only when it is done
+        assert agent.background is False  # intent only; the env below is what the CLI obeys
         assert agent.tools == ["Read", "Grep", "Glob", GIT_HISTORY_TOOL_NAME]
         assert "Agent" not in agent.tools
         assert name in agent.description
@@ -112,3 +112,15 @@ def test_the_trace_exporter_settings_never_reach_the_cli(tmp_path: Path) -> None
     ):
         assert options.env["OTEL_EXPORTER_OTLP_HEADERS"] == ""
         assert options.env["OTEL_EXPORTER_OTLP_ENDPOINT"] == ""
+
+
+def test_specialists_run_in_the_foreground(tmp_path: Path) -> None:
+    """The bundled CLI backgrounds every Agent call by default and never reads
+    `background: false`; only disabling background tasks keeps the lead's
+    Agent call open until the specialist has reported."""
+    ctx = context(tmp_path)
+    for options in (
+        lead_options(settings(), ctx, HookState()),
+        verifier_options(settings(), ctx, HookState()),
+    ):
+        assert options.env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"

@@ -130,8 +130,9 @@ def deny_mutating_tools(state: HookState) -> Hook:
 def await_specialists(state: HookState) -> Hook:
     """Hold the lead's answer until every specialist it started has reported.
 
-    The CLI runs the specialists in the background, so the lead's Agent call
-    returns before the specialist has reported. An answer submitted then
+    The CLI backgrounds Agent calls by default, and then the lead's Agent call
+    returns before the specialist has reported. The options turn background
+    tasks off, so this is the second line of defense. An answer submitted then
     misses that specialist's findings, and its late report starts more turns
     that end in plain text, which fails the run. So the answer is refused,
     naming who is still running, until the last one stops, and then once
