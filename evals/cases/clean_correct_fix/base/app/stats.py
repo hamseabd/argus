@@ -6,5 +6,6 @@ def mean(values: list[float]) -> float:
 
 
 def median(values: list[float]) -> float:
+    """The middle value, or the mean of the two middle values when the count is even."""
     ordered = sorted(values)
     return ordered[len(ordered) // 2]

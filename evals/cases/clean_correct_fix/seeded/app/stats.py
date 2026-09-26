@@ -2,14 +2,11 @@
 
 
 def mean(values: list[float]) -> float:
-    if not values:
-        raise ValueError("mean of an empty list")
     return sum(values) / len(values)
 
 
 def median(values: list[float]) -> float:
-    if not values:
-        raise ValueError("median of an empty list")
+    """The middle value, or the mean of the two middle values when the count is even."""
     ordered = sorted(values)
     middle = len(ordered) // 2
     if len(ordered) % 2:

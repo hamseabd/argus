@@ -169,7 +169,7 @@ The runner builds the same layout the live test uses, `main` holding the base an
 | `removed_auth_check` | the admin check on delete is removed | security |
 | `clean_rename_refactor` | functions renamed with every call site | none expected |
 | `clean_docs_only` | docstrings and a README only | none expected |
-| `clean_correct_fix` | empty-input guards and an even-length median fix | none expected |
+| `clean_correct_fix` | `median` fixed to average the two middle values, as its docstring already says | none expected |
 
 **The scoring** ([`evals/score.py`](evals/score.py)).
 A finding matches a seeded bug when it names the same file and category and its line span, at most 15 lines wide, comes within three lines of the bug's.
