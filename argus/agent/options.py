@@ -37,8 +37,10 @@ def specialist_agents(settings: Settings) -> dict[str, AgentDefinition]:
             model=settings.specialist_model,
             effort=settings.specialist_effort,
             maxTurns=settings.specialist_max_turns,
-            # Foreground: the lead's Agent call returns with the findings, so it
-            # cannot answer while a specialist is still running.
+            # Declares the intent only. The bundled CLI (2.1.259) reads this field
+            # solely as `background === true`; it backgrounds every Agent call by
+            # default. CLAUDE_CODE_DISABLE_BACKGROUND_TASKS in _common is what
+            # actually keeps the specialists in the foreground.
             background=False,
         )
         for name in SPECIALISTS
@@ -92,7 +94,17 @@ def _common(context: ReviewContext, state: HookState) -> dict:
         # account's identity and would duplicate the tree. The exporter settings
         # are blanked too: the headers carry the LangSmith key, and the child
         # process has no use for it.
+        #
+        # The bundled CLI runs an Agent call in the background unless background
+        # tasks are disabled: `background: false` on the definition is never read,
+        # and in its default fork mode the model is not even offered
+        # run_in_background. A backgrounded specialist returns at once and reports
+        # after the lead has answered, which is how reviews failed from Sep 24.
+        # With background tasks off, the lead's Agent calls return with the
+        # findings; calls made in one message still run concurrently. Argus has
+        # no other background work (Bash and Monitor are not in its tool set).
         "env": {
+            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
             "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
             "OTEL_EXPORTER_OTLP_HEADERS": "",
             "OTEL_EXPORTER_OTLP_ENDPOINT": "",

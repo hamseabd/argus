@@ -67,6 +67,23 @@ def test_footer_mentions_schema_rejections_only_when_there_were_any() -> None:
     assert "· 3 schema rejections ·" in render_report(noisy)
 
 
+def test_footer_mentions_held_and_recovered_answers_only_when_there_were_any() -> None:
+    clean = result([])
+    held = clean.model_copy(
+        update={
+            "metrics": [
+                clean.metrics[0].model_copy(
+                    update={"answers_held": 2, "structured_output_recovered": True}
+                )
+            ]
+        }
+    )
+
+    assert "held" not in render_report(clean)
+    assert "recovered" not in render_report(clean)
+    assert "· 2 answers held · answer recovered ·" in render_report(held)
+
+
 def finding(**overrides) -> Finding:
     base = dict(
         id="security-1",
