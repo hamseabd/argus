@@ -238,6 +238,23 @@ def test_cost_turns_and_latency_are_totalled_and_averaged_per_review() -> None:
     assert summary.mean_duration_ms == pytest.approx(2000)
 
 
+def test_cost_averages_over_every_case_and_turns_and_latency_over_completed_runs() -> None:
+    scores = [
+        failed_case(bug_case(SQLI), "boom", cost_usd=3.0),
+        score_case(clean_case(), result(cost=1.0, turns=(4,), duration_ms=2000)),
+    ]
+
+    summary = summarize(scores)
+
+    assert summary.mean_cost_usd == pytest.approx(2.0)  # a failed run still spent its quota
+    assert summary.mean_turns == pytest.approx(4.0)  # a failed run has no turns to count
+    assert summary.mean_duration_ms == pytest.approx(2000)
+    header = render_markdown({"verify": scores}).splitlines()[0]
+    assert "| Cost per case |" in header
+    assert "| Turns per completed review |" in header
+    assert "| Latency per completed review |" in header
+
+
 def test_failed_runs_are_counted() -> None:
     summary = summarize([failed_case(bug_case(SQLI), "boom", cost_usd=0.0)])
 

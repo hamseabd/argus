@@ -57,7 +57,12 @@ class CaseScore(_Model):
 
 
 class Summary(_Model):
-    """Every case of one mode, pooled."""
+    """Every case of one mode, pooled.
+
+    The means use two populations on purpose: cost is averaged over every case,
+    because a failed run still spent its quota, while turns and latency are
+    averaged over the runs that completed, because a failed run reports neither.
+    """
 
     cases: int
     errors: int
@@ -185,8 +190,8 @@ def _num(value: float | None, fmt: str) -> str:
 def render_markdown(scores_by_mode: Mapping[str, list[CaseScore]]) -> str:
     """A summary row per mode, then a row per case with its counts in every mode."""
     lines = [
-        "| Mode | Precision | Recall | Clean-control FP rate | Verifier accuracy "
-        "| TP / FP / FN | Cost per review | Turns per review | Latency per review | Errors |",
+        "| Mode | Precision | Recall | Clean-control FP rate | Verifier accuracy | TP / FP / FN "
+        "| Cost per case | Turns per completed review | Latency per completed review | Errors |",
         "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for mode, scores in scores_by_mode.items():

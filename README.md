@@ -178,12 +178,13 @@ Precision and recall are pooled over the corpus; a second finding on an already-
 The clean-control false-positive rate is the share of clean controls with any reported finding.
 Verifier accuracy is right decisions (a real bug confirmed, a false one rejected) over every confirm or reject, and the two costly mistakes, real bugs rejected and false positives rejected, are reported separately; a failed verification is not a decision.
 A case whose run fails counts as missing its bugs and keeps what it cost.
-Cost, turns, and latency are per review, from the same `ReviewResult` the CLI writes.
+Cost, turns, and latency come from the same `ReviewResult` the CLI writes.
+Cost is averaged over every case, failed runs included, because a failed run still spent its quota; turns and latency are averaged over the runs that completed, because a failed run reports neither.
 
-| Mode | Precision | Recall | Clean-control FP rate | Verifier accuracy | TP / FP / FN | Cost per review | Turns per review | Latency per review |
-|---|---|---|---|---|---|---|---|---|
-| verify | not run yet | | | | | | | |
-| no-verify | not run yet | | | | | | | |
+| Mode | Precision | Recall | Clean-control FP rate | Verifier accuracy | TP / FP / FN | Cost per case | Turns per completed review | Latency per completed review | Errors |
+|---|---|---|---|---|---|---|---|---|---|
+| verify | not run yet | | | | | | | | |
+| no-verify | not run yet | | | | | | | | |
 
 ## Usage
 
