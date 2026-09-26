@@ -6,7 +6,8 @@ a reason the model can read, so it does not retry. The other hooks only
 observe: they log every tool call, count subagent starts so the pipeline
 can tell whether the lead delegated as instructed, count rejected
 structured outputs so a review that only validated after several attempts
-is visible in the metrics, and keep per-agent tallies, since inside a
+is visible in the metrics, keep the lead's last accepted answer so a run
+whose final turn ends in plain text can still return it, and keep per-agent tallies, since inside a
 subagent the tool hooks carry that subagent's id and type.
 
 When a TraceRecorder is attached, the same hooks feed it the start, end,
@@ -22,6 +23,7 @@ from claude_agent_sdk import HookContext, HookMatcher
 from claude_agent_sdk.types import HookEvent
 
 from argus.agent.tools import GIT_HISTORY_TOOL_NAME
+from argus.settings import DEFAULT_ANSWER_HOLDS
 from argus.telemetry import get_logger
 from argus.tracing import redact, summarize
 
@@ -82,7 +84,13 @@ class HookState:
     reads_denied: int = 0
     running: dict[str, str] = field(default_factory=dict)
     """Subagents started and not yet stopped: agent_id to agent type."""
+    finished: list[str] = field(default_factory=list)
+    """Subagent types that stopped since the lead's answer was last held."""
     answers_held: int = 0
+    answer_hold_limit: int = DEFAULT_ANSWER_HOLDS
+    """Holds after which the answer goes through regardless, so a hold cannot last forever."""
+    accepted_answer: Any = None
+    """The lead's last structured output the SDK accepted; the runner falls back to it."""
     clock: Callable[[], float] = time.monotonic
     recorder: "TraceRecorder | None" = None
     """Builds the query's spans; attached by the runner for the length of one query."""
@@ -120,25 +128,52 @@ def deny_mutating_tools(state: HookState) -> Hook:
 
 
 def await_specialists(state: HookState) -> Hook:
-    """Hold the lead's answer until every specialist it started has returned.
+    """Hold the lead's answer until every specialist it started has reported.
 
-    The CLI can run a subagent in the background, so the lead's Agent call may
-    return before the specialist has reported. An answer submitted then misses
-    that specialist's findings, and its late report starts more turns that end
-    in plain text, which fails the run. The answer is refused, naming who is
-    still running, until the last one stops.
+    The CLI backgrounds Agent calls by default, and then the lead's Agent call
+    returns before the specialist has reported. The options turn background
+    tasks off, so this is the second line of defense. An answer submitted then
+    misses that specialist's findings, and its late report starts more turns
+    that end in plain text, which fails the run. So the answer is refused,
+    naming who is still running, until the last one stops, and then once
+    more: SubagentStop fires before the report reaches the lead, so an answer
+    right after it can still predate the findings. Holds are bounded by
+    answer_hold_limit; past it the answer goes through, and the runner's
+    recovery of the accepted answer covers what follows.
     """
 
     async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
-        if data.get("agent_id") or not state.running:
+        if data.get("agent_id"):
             return {}
-        waiting = sorted(set(state.running.values()))
+        log = get_logger()
+        if not state.running and not state.finished:
+            if state.answers_held:
+                log.info("answer_hold_released", held=state.answers_held, reason="reported")
+            return {}
+        if state.answers_held >= state.answer_hold_limit:
+            log.warning(
+                "answer_hold_released",
+                held=state.answers_held,
+                reason="hold_limit",
+                waiting=sorted(set(state.running.values())),
+            )
+            return {}
+        if state.running:
+            waiting = sorted(set(state.running.values()))
+            reason = (
+                f"Still running: {', '.join(waiting)}. Wait for their findings, "
+                "merge them with the others, then answer with the Review."
+            )
+            log.warning("answer_held", waiting=waiting)
+        else:
+            finished = sorted(set(state.finished))
+            reason = (
+                f"{', '.join(finished)} just finished; its report may not have reached you "
+                "yet. Wait for it, merge it with the others, then answer with the Review."
+            )
+            log.warning("answer_held", finished=finished)
+        state.finished.clear()
         state.answers_held += 1
-        reason = (
-            f"Still running: {', '.join(waiting)}. Wait for their findings, "
-            "merge them with the others, then answer with the Review."
-        )
-        get_logger().warning("answer_held", waiting=waiting)
         if state.recorder is not None:
             state.recorder.on_tool_denied(data, reason)
         return {
@@ -201,6 +236,10 @@ def audit_tool_call(state: HookState) -> Hook:
     async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
         state.tool_calls += 1
         state.agent(data).tool_calls += 1
+        if data.get("tool_name") == STRUCTURED_OUTPUT_TOOL and not data.get("agent_id"):
+            # PostToolUse fires only once the SDK has validated the answer; a
+            # rejected one goes to PostToolUseFailure instead.
+            state.accepted_answer = data.get("tool_input")
         get_logger().info(
             "tool_call", tool=data.get("tool_name"), input=summarize(data.get("tool_input"))
         )
@@ -244,7 +283,9 @@ def on_subagent_start(state: HookState) -> Hook:
 def on_subagent_stop(state: HookState) -> Hook:
     async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
         state.subagents_stopped += 1
-        state.running.pop(str(data.get("agent_id")), None)
+        if data.get("agent_id"):
+            state.running.pop(str(data["agent_id"]), None)
+            state.finished.append(str(data.get("agent_type") or "agent"))
         counters = state.agent(data)
         if counters.started_at is not None:
             counters.duration_ms = round((state.clock() - counters.started_at) * 1000)

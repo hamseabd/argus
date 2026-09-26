@@ -17,6 +17,9 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 LogFormat = Literal["auto", "json", "console"]
 LogLevel = Literal["debug", "info", "warning"]
 
+DEFAULT_ANSWER_HOLDS = 3
+"""Times the lead's answer may be held in one query before it goes through regardless."""
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ARGUS_", extra="ignore")
@@ -30,6 +33,11 @@ class Settings(BaseSettings):
         description="Reads the lead may make itself before it must answer; the specialists read.",
     )
     lead_max_budget_usd: float = Field(default=3.0, gt=0)
+    lead_max_answer_holds: int = Field(
+        default=DEFAULT_ANSWER_HOLDS,
+        ge=0,
+        description="Times the lead's answer may be held for a specialist still reporting.",
+    )
 
     specialist_model: str = "claude-sonnet-5"
     specialist_effort: Effort = "medium"

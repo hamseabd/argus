@@ -13,6 +13,7 @@ def test_defaults_match_the_spec() -> None:
     assert s.lead_max_turns == 40
     assert s.lead_read_budget == 10
     assert s.lead_max_budget_usd == 3.0
+    assert s.lead_max_answer_holds == 3
     assert s.specialist_model == "claude-sonnet-5"
     assert s.specialist_effort == "medium"
     assert s.specialist_max_turns == 25
@@ -58,3 +59,9 @@ def test_trace_content_is_off_by_default_and_env_overridable(monkeypatch) -> Non
     assert Settings(_env_file=None).trace_content is False
     monkeypatch.setenv("ARGUS_TRACE_CONTENT", "true")
     assert Settings(_env_file=None).trace_content is True
+
+
+def test_the_answer_hold_limit_is_env_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ARGUS_LEAD_MAX_ANSWER_HOLDS", "5")
+
+    assert Settings(_env_file=None).lead_max_answer_holds == 5

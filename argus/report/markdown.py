@@ -61,6 +61,8 @@ def render_footer(result: ReviewResult) -> str:
     seconds = result.duration_ms / 1000
     subagents = sum(m.subagents_run for m in metrics)
     rejections = sum(m.output_rejections for m in metrics)
+    held = sum(m.answers_held for m in metrics)
+    recovered = sum(m.structured_output_recovered for m in metrics)
     parts = [
         f"Cost ${result.total_cost_usd:.2f}",
         f"{total_input:,} input tokens ({cached:,} cached)",
@@ -71,6 +73,10 @@ def render_footer(result: ReviewResult) -> str:
     ]
     if rejections:
         parts.append(f"{rejections} schema rejection{'s' if rejections != 1 else ''}")
+    if held:
+        parts.append(f"{held} {_plural(held, 'answer')} held")
+    if recovered:
+        parts.append(f"{_plural(recovered, 'answer')} recovered")
     parts.append(f"session {result.session_id}")
     footer = " · ".join(parts)
     review_stage = next((m for m in metrics if m.stage == "review"), None)
