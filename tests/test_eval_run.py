@@ -5,11 +5,16 @@ import json
 from datetime import date
 from pathlib import Path
 
+import pytest
+from typer.testing import CliRunner
+
+import argus.agent.review
+import evals.run
 from argus.domain.errors import AgentRunError
 from argus.domain.models import Finding, Review, ReviewContext, StageMetrics, Verdict
 from argus.pipeline import StageOutcome
 from evals.corpus import load_cases
-from evals.run import result_label, run_eval
+from evals.run import ResultPaths, result_label, run_eval
 
 CASES = {case.name: case for case in load_cases()}
 BUGS = {bug.file: bug for case in CASES.values() for bug in case.expected}
@@ -125,3 +130,65 @@ def test_a_failed_review_is_scored_as_missed_with_its_cost_and_the_run_goes_on(
     case = record["modes"]["verify"]["cases"][0]
     assert case["result"] is None
     assert "error_max_budget_usd" in case["score"]["error"]
+
+
+class FakeLiveRun:
+    """Stands in for run_eval, so main() is driven end to end without a model call."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def __call__(self, cases, agent, *, modes, out_dir, label, verify_concurrency):
+        self.calls.append({"cases": [c.name for c in cases], "modes": modes, "out_dir": out_dir})
+        out_dir.mkdir(parents=True, exist_ok=True)
+        paths = ResultPaths(json=out_dir / f"{label}.json", markdown=out_dir / f"{label}.md")
+        paths.markdown.write_text("| Mode | Precision |\n", encoding="utf-8")
+        return paths
+
+
+@pytest.fixture
+def live_run(monkeypatch: pytest.MonkeyPatch) -> FakeLiveRun:
+    fake = FakeLiveRun()
+    monkeypatch.setattr(evals.run, "run_eval", fake)
+    monkeypatch.setattr(evals.run, "_short_sha", lambda: "abc1234")
+    monkeypatch.setattr(argus.agent.review, "SdkReviewAgent", lambda settings: object())
+    return fake
+
+
+def test_an_unknown_mode_is_a_bad_parameter(live_run: FakeLiveRun) -> None:
+    result = CliRunner().invoke(evals.run.app, ["--mode", "fast"])
+
+    assert result.exit_code == 2
+    assert "Invalid value for --mode" in result.output
+    assert "unknown mode 'fast'" in result.output
+    assert live_run.calls == []
+
+
+def test_an_unknown_case_is_a_bad_parameter(live_run: FakeLiveRun) -> None:
+    result = CliRunner().invoke(evals.run.app, ["--case", "sqli", "--case", "nope"])
+
+    assert result.exit_code == 2
+    assert "Invalid value for --case" in result.output
+    assert "no such case 'nope'" in result.output
+    assert live_run.calls == []
+
+
+def test_main_writes_under_out_and_echoes_the_table(live_run: FakeLiveRun, tmp_path: Path) -> None:
+    out = tmp_path / "record"
+
+    result = CliRunner().invoke(
+        evals.run.app, ["--mode", "verify", "--case", "sqli", "--out", str(out)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert live_run.calls == [{"cases": ["sqli"], "modes": ["verify"], "out_dir": out}]
+    assert result.stdout == "| Mode | Precision |\n"
+
+
+def test_main_defaults_to_every_mode_and_every_case(live_run: FakeLiveRun, tmp_path: Path) -> None:
+    result = CliRunner().invoke(evals.run.app, ["--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    (call,) = live_run.calls
+    assert call["modes"] == ["verify", "no-verify"]
+    assert call["cases"] == [c.name for c in load_cases()]
