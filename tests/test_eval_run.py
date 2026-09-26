@@ -139,7 +139,14 @@ class FakeLiveRun:
         self.calls: list[dict] = []
 
     async def __call__(self, cases, agent, *, modes, out_dir, label, verify_concurrency):
-        self.calls.append({"cases": [c.name for c in cases], "modes": modes, "out_dir": out_dir})
+        self.calls.append(
+            {
+                "cases": [c.name for c in cases],
+                "modes": modes,
+                "out_dir": out_dir,
+                "verify_concurrency": verify_concurrency,
+            }
+        )
         out_dir.mkdir(parents=True, exist_ok=True)
         paths = ResultPaths(json=out_dir / f"{label}.json", markdown=out_dir / f"{label}.md")
         paths.markdown.write_text("| Mode | Precision |\n", encoding="utf-8")
@@ -173,7 +180,10 @@ def test_an_unknown_case_is_a_bad_parameter(live_run: FakeLiveRun) -> None:
     assert live_run.calls == []
 
 
-def test_main_writes_under_out_and_echoes_the_table(live_run: FakeLiveRun, tmp_path: Path) -> None:
+def test_main_writes_under_out_and_echoes_the_table(
+    live_run: FakeLiveRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARGUS_VERIFY_CONCURRENCY", "7")
     out = tmp_path / "record"
 
     result = CliRunner().invoke(
@@ -181,7 +191,9 @@ def test_main_writes_under_out_and_echoes_the_table(live_run: FakeLiveRun, tmp_p
     )
 
     assert result.exit_code == 0, result.output
-    assert live_run.calls == [{"cases": ["sqli"], "modes": ["verify"], "out_dir": out}]
+    assert live_run.calls == [
+        {"cases": ["sqli"], "modes": ["verify"], "out_dir": out, "verify_concurrency": 7}
+    ]
     assert result.stdout == "| Mode | Precision |\n"
 
 
