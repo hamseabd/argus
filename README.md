@@ -82,6 +82,7 @@ Python is the harness and owns the pipeline; the SDK owns the fan-out inside the
 | Pipeline | `argus/pipeline.py` | Stage orchestration over domain types, behind a `ReviewAgent` protocol so it is tested with a fake agent. |
 | Report | `argus/report/` | Terminal Markdown and the GitHub review payload. |
 | CLI | `argus/cli.py` | Typer. Imports the SDK lazily so `argus version` and the pipeline never load it. |
+| Evals | `evals/` | Outside the package: the seeded-bug corpus, the scoring, and the opt-in live runner, which reaches the SDK only through `SdkReviewAgent`. See [Evaluation](#evaluation). |
 
 That boundary is enforced by a test: a source scan proves only `argus/agent/` mentions the SDK, and a subprocess import proves the other modules never load it.
 
@@ -131,6 +132,52 @@ That is the verify stage's job, so the lead now delegates, merges, and returns, 
 - **[#15](https://github.com/hamseabd/argus/pull/15).** The specialist cap was 15 until the per-agent telemetry showed the quality specialist using all of them on three reviews in a row and reporting nothing; a capped run costs the same and returns less.
 - **[#19](https://github.com/hamseabd/argus/pull/19).** What is left of the spread is the lead's own reading. Per-agent telemetry put a number on it: 2 tool calls on the $0.42 review of PR #18, 43 on the $2.49 review of PR #10, where it also delegated to its three specialists 16 seconds apart instead of in one message.
 The prompt had forbidden both for several increments, so the read budget is enforced in a hook instead, which bounds the expensive tail without touching a normal review.
+
+## Evaluation
+
+The sample reviews above are anecdotes; the eval harness in [`evals/`](evals/) is the measurement.
+It runs Argus over a corpus of small repositories with known answers and scores what it reports.
+
+**This has not been run yet.** The harness, the corpus, and the scoring are in place and tested offline; the table below is a placeholder until the first live run is committed under `evals/results/`.
+
+```bash
+export CLAUDE_CODE_OAUTH_TOKEN=...   # from `claude setup-token`; omitted, the machine login is used
+uv run python -m evals.run           # every case, verify and no-verify; --mode and --case narrow it
+```
+
+The same run is available on demand as the [`argus-eval`](.github/workflows/eval.yml) workflow (`workflow_dispatch` only; it needs the `CLAUDE_CODE_OAUTH_TOKEN` secret and posts nothing).
+A full run is twenty reviews, ten cases in each mode, one at a time, against the subscription.
+It writes `evals/results/<date>-<sha>.json`, with every `ReviewResult` and the scores, and the table beside it as `.md`.
+
+**The corpus.** Each case under [`evals/cases/`](evals/cases/) is a `base/` snapshot, a `seeded/` snapshot, and an `expected.yaml` listing each seeded bug's file, line range, category, and severity.
+The runner builds the same layout the live test uses, `main` holding the base and a `feature` branch holding the change, in a temporary directory with a neutral name, and reviews it with `run_review` and `SdkReviewAgent` exactly as `argus review --diff --base main` would.
+
+| Case | Seeded change | Category |
+|---|---|---|
+| `sqli` | a new search interpolates user input into SQL | security |
+| `off_by_one` | a batching loop stops one item short | correctness |
+| `path_traversal` | the upload-directory containment check is dropped | security |
+| `missing_await` | an email coroutine is called but never awaited | correctness |
+| `leaked_file_handle` | a file is opened per log without ever being closed | correctness |
+| `none_deref` | a lookup that can return `None` is dereferenced | correctness |
+| `removed_auth_check` | the admin check on delete is removed | security |
+| `clean_rename_refactor` | functions renamed with every call site | none expected |
+| `clean_docs_only` | docstrings and a README only | none expected |
+| `clean_correct_fix` | empty-input guards and an even-length median fix | none expected |
+
+**The scoring** ([`evals/score.py`](evals/score.py)).
+A finding matches a seeded bug when it names the same file and category and its line span comes within three lines of the bug's.
+A finding counts as reported unless the verifier rejected it, the same rule the report uses.
+Precision and recall are pooled over the corpus; a second finding on an already-matched bug is a duplicate, not a false positive.
+The clean-control false-positive rate is the share of clean controls with any reported finding.
+Verifier accuracy is right decisions (a real bug confirmed, a false one rejected) over every confirm or reject, and the two costly mistakes, real bugs rejected and false positives rejected, are reported separately; a failed verification is not a decision.
+A case whose run fails counts as missing its bugs and keeps what it cost.
+Cost, turns, and latency are per review, from the same `ReviewResult` the CLI writes.
+
+| Mode | Precision | Recall | Clean-control FP rate | Verifier accuracy | TP / FP / FN | Cost per review | Turns per review | Latency per review |
+|---|---|---|---|---|---|---|---|---|
+| verify | not run yet | | | | | | | |
+| no-verify | not run yet | | | | | | | |
 
 ## Usage
 
@@ -223,8 +270,8 @@ Argus reads diffs and files, so the language of the reviewed repository does not
 - **The design came before the code.** A design spec and an increment plan were committed before the first line of code ([`a26ca3e`](https://github.com/hamseabd/argus/commit/a26ca3e)).
 - **One increment, one branch, one pull request, one squash-merge.** Every pull request body has the same four parts: why, what changed, a definition of done, and the verification output pasted in ([#19](https://github.com/hamseabd/argus/pull/19) is the shape).
 - **The failing test comes first.** The unit tests run offline without credentials or network: the pipeline through a fake agent, the runner through a recorded SDK message stream, the GitHub client through `respx`, and the diff parser against fixtures that git itself generated.
-An opt-in live test is the end-to-end eval: it builds a repository with a seeded SQL injection and an off-by-one on a feature branch and asserts Argus, running against the real SDK, confirms a finding in one of the seeded files ([`tests/test_live.py`](tests/test_live.py)).
-- **Architecture rules are tests, not comments.** [`tests/test_boundaries.py`](tests/test_boundaries.py) proves that only `argus/agent/` imports the SDK, by source scan and by a subprocess import, and that nothing in the package prints; [`tests/test_workflows.py`](tests/test_workflows.py) asserts the review workflow's triggers, permissions, timeout, and concurrency.
+An opt-in live test is the end-to-end smoke check: it builds a repository with a seeded SQL injection and an off-by-one on a feature branch and asserts Argus, running against the real SDK, confirms a finding in one of the seeded files ([`tests/test_live.py`](tests/test_live.py)); the [eval harness](#evaluation) scores the same pipeline over a larger corpus.
+- **Architecture rules are tests, not comments.** [`tests/test_boundaries.py`](tests/test_boundaries.py) proves that only `argus/agent/` imports the SDK, by source scan and by a subprocess import, and that nothing in the package or the eval harness prints; [`tests/test_workflows.py`](tests/test_workflows.py) asserts the review and eval workflows' triggers, permissions, timeouts, and pins.
 - **Argus reviews its own pull requests.** Every pull request since [#7](https://github.com/hamseabd/argus/pull/7), which landed the dogfood workflow, is reviewed by Argus via the Action, and each finding is dispositioned in the thread: on [#21](https://github.com/hamseabd/argus/pull/21) two were fixed before merge.
 - **Decisions were changed by measurement, not preference.** [What the measurements changed](#what-the-measurements-changed) lists the five.
 - Claude Code was the pair programmer throughout; the design, the failing tests, the review of every diff, and every merge were the author's.
@@ -237,6 +284,7 @@ uv run ruff check .          # lint
 uv run ruff format --check . # format check
 uv run pytest -q             # unit tests, offline
 uv run pytest -m live -s     # opt-in: the real SDK against a seeded-bug fixture
+uv run python -m evals.run   # opt-in: score the real SDK over the eval corpus
 ```
 
 What those tests cover is described under [How it was built](#how-it-was-built).
