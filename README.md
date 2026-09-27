@@ -154,6 +154,7 @@ uv run python -m evals.run           # every case, verify and no-verify; --mode 
 The same run is available on demand as the [`argus-eval`](.github/workflows/eval.yml) workflow (`workflow_dispatch` only; it needs the `CLAUDE_CODE_OAUTH_TOKEN` secret and posts nothing).
 A full run is twenty reviews, ten cases in each mode, one at a time, against the subscription.
 It writes `evals/results/<date>-<sha>.json`, with every `ReviewResult` and the scores, and the table beside it as `.md`.
+`evals/results/` is gitignored because a record holds raw model output and error text; read one before committing it with `git add -f`.
 
 **The corpus.** Each case under [`evals/cases/`](evals/cases/) is a `base/` snapshot, a `seeded/` snapshot, and an `expected.yaml` listing each seeded bug's file, line range, category, and severity.
 The runner builds the same layout the live test uses, `main` holding the base and a `feature` branch holding the change, in a temporary directory with a neutral name, and reviews it with `run_review` and `SdkReviewAgent` exactly as `argus review --diff --base main` would.

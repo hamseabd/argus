@@ -8,7 +8,8 @@ name: argus-eval
 # On demand only: a full run is twenty reviews against the subscription, so
 # no push or pull request ever starts one. The record (every ReviewResult
 # plus the table) is kept as an artifact and the table goes on the run's
-# summary page; commit it under evals/results/ to cite it.
+# summary page; to cite it, read it and commit it under the gitignored
+# evals/results/ with git add -f.
 #
 # Nothing is posted anywhere and no GitHub token is needed: each case is a
 # local git repository built in a temporary directory.
