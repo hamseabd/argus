@@ -66,6 +66,9 @@ class Summary(_Model):
     The means use two populations on purpose: cost is averaged over every case,
     because a failed run still spent its quota, while turns and latency are
     averaged over the runs that completed, because a failed run reports neither.
+    The clean-control rate also counts only the controls that completed: a
+    crashed control reported nothing because it reviewed nothing, so it is an
+    error, never a clean pass.
     """
 
     cases: int
@@ -154,13 +157,13 @@ def summarize(scores: Iterable[CaseScore]) -> Summary:
     tp = sum(s.true_positives for s in scores)
     fp = sum(s.false_positives for s in scores)
     fn = sum(s.false_negatives for s in scores)
-    controls = [s for s in scores if s.clean]
-    flagged = sum(s.reported > 0 for s in controls)
     tc = sum(s.true_bugs_confirmed for s in scores)
     tr = sum(s.true_bugs_rejected for s in scores)
     fc = sum(s.false_positives_confirmed for s in scores)
     fr = sum(s.false_positives_rejected for s in scores)
     ran = [s for s in scores if s.error is None]
+    controls = [s for s in ran if s.clean]
+    flagged = sum(s.reported > 0 for s in controls)
     total_cost = round(sum(s.cost_usd for s in scores), 6)
     return Summary(
         cases=len(scores),

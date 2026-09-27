@@ -175,7 +175,7 @@ The runner builds the same layout the live test uses, `main` holding the base an
 A finding matches a seeded bug when it names the same file and category and its line span, at most 15 lines wide, comes within three lines of the bug's.
 A finding counts as reported unless the verifier rejected it, the same rule the report uses.
 Precision and recall are pooled over the corpus; a second finding on an already-matched bug is a duplicate, not a false positive.
-The clean-control false-positive rate is the share of clean controls with any reported finding.
+The clean-control false-positive rate is the share of clean controls with any reported finding, over the controls that completed; a crashed control reviewed nothing, so it counts as an error, never as a clean pass.
 Verifier accuracy is right decisions (a real bug confirmed, a false one rejected) over every confirm or reject, and the two costly mistakes, real bugs rejected and false positives rejected, are reported separately; a failed verification is not a decision.
 A case whose run fails counts as missing its bugs and keeps what it cost.
 Cost, turns, and latency come from the same `ReviewResult` the CLI writes.

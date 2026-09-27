@@ -294,3 +294,24 @@ def test_a_case_score_round_trips_through_json() -> None:
     score = score_case(bug_case(SQLI), result(finding("a")))
 
     assert CaseScore.model_validate_json(score.model_dump_json()) == score
+
+
+def test_a_crashed_clean_control_is_an_error_not_a_clean_pass() -> None:
+    scores = [
+        failed_case(clean_case("clean_a"), "boom", cost_usd=0.5),
+        score_case(clean_case("clean_b"), result(finding("a"))),
+        score_case(clean_case("clean_c"), result()),
+    ]
+
+    summary = summarize(scores)
+
+    assert summary.errors == 1
+    assert (summary.clean_controls, summary.clean_controls_flagged) == (2, 1)
+    assert summary.clean_control_fp_rate == pytest.approx(1 / 2)
+
+
+def test_only_crashed_clean_controls_leave_the_rate_undefined() -> None:
+    summary = summarize([failed_case(clean_case(), "boom", cost_usd=0.0)])
+
+    assert summary.clean_controls == 0
+    assert summary.clean_control_fp_rate is None
