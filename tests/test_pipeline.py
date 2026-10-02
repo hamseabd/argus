@@ -9,7 +9,14 @@ from opentelemetry.trace import StatusCode
 
 from argus import telemetry
 from argus.domain.errors import AgentRunError, ReviewProtocolError
-from argus.domain.models import Finding, Review, ReviewContext, StageMetrics, Verdict
+from argus.domain.models import (
+    Finding,
+    KnownFinding,
+    Review,
+    ReviewContext,
+    StageMetrics,
+    Verdict,
+)
 from argus.pipeline import StageOutcome, run_review
 
 
@@ -289,3 +296,33 @@ def test_a_failed_review_stage_marks_the_run_and_the_stage(tmp_path: Path, spans
     assert rev.status.status_code == StatusCode.ERROR
     assert rev.attributes["langsmith.metadata.cost_usd"] == 3.0
     assert run.status.status_code == StatusCode.ERROR
+
+
+def test_findings_already_reported_are_marked_known_and_not_verified(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1), finding(2)])
+    agent = FakeAgent(review, {"correctness-1": "confirmed", "correctness-2": "confirmed"})
+    known = [KnownFinding(file="f2.py", line=2, title="t2", url="https://x/r#discussion_1")]
+
+    result = asyncio.run(run_review(context(tmp_path), agent, known=known))
+
+    statuses = {f.id: f.status for f in result.review.findings}
+    assert statuses == {"correctness-1": "confirmed", "correctness-2": "known"}
+    assert [fid for fid, _ in agent.verify_calls] == ["correctness-1"]
+    assert result.total_cost_usd == 1.1
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    skipped = next(e for e in events if e["event"] == "known_findings_skipped")
+    assert skipped["findings"] == {"correctness-2": "https://x/r#discussion_1"}
+    assert events[-1]["known"] == 1
+
+
+def test_known_findings_stay_known_without_verification_too(tmp_path: Path) -> None:
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    known = [KnownFinding(file="f1.py", line=1, title="t1", url="u")]
+
+    result = asyncio.run(
+        run_review(context(tmp_path), FakeAgent(review, {}), verify=False, known=known)
+    )
+
+    assert result.review.findings[0].status == "known"

@@ -16,12 +16,14 @@ from argus.context.diff import diff_sections
 from argus.domain.errors import AgentRunError, ArgusError, ReviewProtocolError
 from argus.domain.models import (
     Finding,
+    KnownFinding,
     Review,
     ReviewContext,
     ReviewResult,
     StageMetrics,
     Status,
     Verdict,
+    matches_known,
 )
 from argus.telemetry import bind_run, get_logger, new_run_id
 from argus.tracing import meta, record_error, span, stage_attributes
@@ -60,11 +62,15 @@ async def run_review(
     verify: bool = True,
     verify_concurrency: int = DEFAULT_VERIFY_CONCURRENCY,
     run_id: str | None = None,
+    known: Sequence[KnownFinding] = (),
 ) -> ReviewResult:
     """Run the review stage, verify each finding, and return everything produced.
 
     Pass run_id when the caller already bound one for its own log events;
     contextvars bound inside this coroutine do not reach the caller's context.
+    Pass known, what earlier Argus reviews already posted on the pull request,
+    and a finding that repeats one is marked known before verification: it is
+    neither re-verified nor reported again.
     The whole run is one trace: argus.run, with a span per stage under it.
     """
     run_id = run_id or new_run_id()
@@ -76,7 +82,7 @@ async def run_review(
         verify=verify,
     )
     with span("argus.run", "chain", attributes=attributes) as run_span:
-        result = await _run_review(context, agent, verify, verify_concurrency, run_id)
+        result = await _run_review(context, agent, verify, verify_concurrency, run_id, known)
         findings = result.review.findings
         run_span.set_attributes(
             meta(
@@ -84,6 +90,7 @@ async def run_review(
                 confirmed=sum(f.status == "confirmed" for f in findings),
                 unverified=sum(f.status == "unverified" for f in findings),
                 rejected=sum(f.status == "rejected" for f in findings),
+                known=sum(f.status == "known" for f in findings),
             )
         )
         return result
@@ -95,6 +102,7 @@ async def _run_review(
     verify: bool,
     verify_concurrency: int,
     run_id: str,
+    known: Sequence[KnownFinding],
 ) -> ReviewResult:
     log = get_logger()
     started = time.monotonic()
@@ -116,9 +124,16 @@ async def _run_review(
     statuses: dict[str, Status] = {f.id: "unverified" for f in review.findings}
     failed_cost = 0.0
 
-    if verify and review.findings:
-        outcomes = await _verify_all(context, agent, review.findings, verify_concurrency)
-        for finding, outcome in zip(review.findings, outcomes, strict=True):
+    skipped = {f.id: earlier.url for f in review.findings if (earlier := matches_known(f, known))}
+    for finding_id in skipped:
+        statuses[finding_id] = "known"
+    if skipped:
+        log.info("known_findings_skipped", findings=skipped)
+    fresh = [f for f in review.findings if f.id not in skipped]
+
+    if verify and fresh:
+        outcomes = await _verify_all(context, agent, fresh, verify_concurrency)
+        for finding, outcome in zip(fresh, outcomes, strict=True):
             if isinstance(outcome, VerifyFailure):
                 failed_cost += outcome.cost_usd
                 continue
@@ -135,6 +150,7 @@ async def _run_review(
         confirmed=sum(f.status == "confirmed" for f in findings),
         unverified=sum(f.status == "unverified" for f in findings),
         rejected=sum(f.status == "rejected" for f in findings),
+        known=sum(f.status == "known" for f in findings),
     )
     return ReviewResult(
         review=review.model_copy(update={"findings": findings}),

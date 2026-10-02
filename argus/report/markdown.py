@@ -16,6 +16,7 @@ def render_counts(findings: list[Finding]) -> str:
     """One line: how many findings are shown, by status, and how many were rejected."""
     shown = rank_findings(findings)
     rejected = sum(f.status == "rejected" for f in findings)
+    known = sum(f.status == "known" for f in findings)
     counts = [
         f"{n} {status}"
         for status in ("confirmed", "unverified")
@@ -23,8 +24,10 @@ def render_counts(findings: list[Finding]) -> str:
     ]
     if rejected:
         counts.append(f"{rejected} rejected and not shown")
+    if known:
+        counts.append(f"{known} already reported on this pull request and not shown")
     if not shown:
-        return "No findings." + (f" {counts[0]}." if counts else "")
+        return "No findings." + "".join(f" {count}." for count in counts)
     noun = "finding" if len(shown) == 1 else "findings"
     return f"{len(shown)} {noun}: {', '.join(counts)}."
 

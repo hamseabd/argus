@@ -9,7 +9,7 @@ from argus.domain.models import (
     ReviewResult,
     StageMetrics,
 )
-from argus.report.github_review import REVIEW_MARKER, build_review
+from argus.report.github_review import REVIEW_MARKER, build_review, known_findings_from
 
 DIFF = (
     "diff --git a/app/cache.py b/app/cache.py\n--- a/app/cache.py\n+++ b/app/cache.py\n"
@@ -156,3 +156,82 @@ def test_inline_comments_follow_rank_order() -> None:
     payload = build_review(result([low, crit, high]), context())
 
     assert [c["line"] for c in payload["comments"]] == [4, 3, 2]
+
+
+ARGUS_BOT = {"login": "argus-code-reviewer-agent[bot]", "type": "Bot"}
+HUMAN = {"login": "hamseabd", "type": "User"}
+
+
+def review_json(id: int, body: str, user: dict = ARGUS_BOT) -> dict:
+    return {
+        "id": id,
+        "body": body,
+        "user": user,
+        "html_url": f"https://github.com/o/r/pull/7#r{id}",
+    }
+
+
+def comment_json(review_id: int, path: str, line: int | None, body: str, **extra) -> dict:
+    return {
+        "pull_request_review_id": review_id,
+        "path": path,
+        "line": line,
+        "original_line": extra.get("original_line", line),
+        "body": body,
+        "html_url": f"https://github.com/o/r/pull/7#discussion_{review_id}",
+        "user": extra.get("user", ARGUS_BOT),
+    }
+
+
+def test_known_findings_come_from_argus_reviews_inline_comments_and_bodies() -> None:
+    off_diff = finding(id="security-1", file="app/other.py", line=40, title="Open redirect")
+    earlier = build_review(result([finding(), off_diff]), context())
+    reviews = [review_json(1, earlier["body"])]
+    comments = [comment_json(1, c["path"], c["line"], c["body"]) for c in earlier["comments"]]
+
+    known = known_findings_from(reviews, comments)
+
+    assert [(k.file, k.line, k.title) for k in known] == [
+        ("app/cache.py", 2, "Stale entry"),
+        ("app/other.py", 40, "Open redirect"),
+    ]
+    assert known[0].url.endswith("#discussion_1")
+    assert known[1].url.endswith("#r1")
+
+
+def test_reviews_without_the_marker_or_not_posted_by_a_bot_are_ignored() -> None:
+    body = build_review(result([finding()]), context())["body"]
+    reviews = [
+        review_json(1, "LGTM, one nit", HUMAN),
+        review_json(2, body, HUMAN),  # the marker alone is not enough
+        review_json(3, body),
+    ]
+    comments = [
+        comment_json(1, "app/cache.py", 2, "**[HIGH] Not ours** · correctness · confirmed"),
+        comment_json(2, "app/cache.py", 2, "**[HIGH] Spoofed** · correctness · confirmed"),
+        comment_json(3, "app/cache.py", 2, "**[HIGH] Stale entry** · correctness · confirmed"),
+    ]
+
+    known = known_findings_from(reviews, comments)
+
+    assert [k.title for k in known] == ["Stale entry"]
+
+
+def test_an_outdated_inline_comment_keeps_its_original_line_and_a_reply_is_not_a_finding() -> None:
+    reviews = [review_json(1, REVIEW_MARKER + "\n\nsummary")]
+    comments = [
+        comment_json(1, "app/cache.py", None, "**[LOW] Moved since** · quality · unverified"),
+        comment_json(1, "app/cache.py", 2, "Fixed in abc123, thanks.", user=HUMAN),
+    ]
+    comments[0]["original_line"] = 9
+
+    known = known_findings_from(reviews, comments)
+
+    assert [(k.file, k.line, k.title) for k in known] == [("app/cache.py", 9, "Moved since")]
+
+
+def test_known_findings_are_never_posted_again() -> None:
+    payload = build_review(result([finding(), finding(id="x", line=3, status="known")]), context())
+
+    assert len(payload["comments"]) == 1
+    assert "already reported" in payload["body"]
