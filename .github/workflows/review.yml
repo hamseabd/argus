@@ -126,6 +126,9 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GITHUB_TOKEN: ${{ steps.argus-app.outputs.token }}
           ARGUS_LOG_FORMAT: json
+          # The login the minted token posts as; only its earlier reviews are
+          # read back as already-reported findings.
+          ARGUS_REVIEWER_LOGIN: ${{ steps.argus-app.outputs.app-slug }}[bot]
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
       - name: Keep the review record
         if: always()

@@ -218,7 +218,10 @@ def test_fail_on_applies_in_pr_mode(stubbed: dict) -> None:
     )
 
 
-def test_pr_mode_hands_the_findings_argus_already_posted_to_the_pipeline(stubbed: dict) -> None:
+def test_pr_mode_hands_the_findings_argus_already_posted_to_the_pipeline(
+    stubbed: dict, monkeypatch
+) -> None:
+    monkeypatch.setenv("ARGUS_REVIEWER_LOGIN", "argus-code-reviewer-agent[bot]")
     stubbed["reviews"] = [
         {
             "id": 1,
@@ -245,8 +248,22 @@ def test_pr_mode_hands_the_findings_argus_already_posted_to_the_pipeline(stubbed
     assert [(k.file, k.line, k.title) for k in stubbed["known"]] == [("a.py", 3, "Stale entry")]
 
 
-def test_include_known_skips_the_lookup_and_reports_everything(stubbed: dict) -> None:
+def test_include_known_skips_the_lookup_and_reports_everything(stubbed: dict, monkeypatch) -> None:
+    monkeypatch.setenv("ARGUS_REVIEWER_LOGIN", "argus-code-reviewer-agent[bot]")
+
     result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r", "--include-known"])
+
+    assert result.exit_code == 0, result.output
+    assert "fetched_known" not in stubbed
+    assert stubbed["known"] == []
+
+
+def test_without_a_reviewer_identity_no_earlier_review_is_trusted(
+    stubbed: dict, monkeypatch
+) -> None:
+    monkeypatch.delenv("ARGUS_REVIEWER_LOGIN", raising=False)
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
 
     assert result.exit_code == 0, result.output
     assert "fetched_known" not in stubbed

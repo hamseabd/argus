@@ -113,7 +113,7 @@ def review(
                 context = pr_context(client, owner, name, pr, root, settings.diff_size_cap)
                 _warn_on_head_mismatch(context)
                 if not include_known:
-                    known = _known_findings(client, owner, name, pr)
+                    known = _known_findings(client, owner, name, pr, settings.reviewer_login)
             if not context.files and not context.diff_text.strip():
                 _fail("nothing to review: the diff is empty")
             result = asyncio.run(
@@ -138,24 +138,32 @@ def review(
 
 
 def gate_tripped(findings: list[Finding], fail_on: str) -> bool:
-    """True if a confirmed or unverified finding is at or above the severity.
+    """True if any finding not refuted is at or above the severity.
 
-    A known finding tripped the gate when it was first reported; it is not
-    re-verified here, so it is not gated again.
+    A known finding counts: reported once before is not fixed, so an open
+    critical still fails the gate however many times Argus has seen it.
     """
     threshold = SEVERITY_ORDER[fail_on]
-    return any(
-        f.status in ("confirmed", "unverified") and SEVERITY_ORDER[f.severity] <= threshold
-        for f in findings
-    )
+    return any(f.status != "rejected" and SEVERITY_ORDER[f.severity] <= threshold for f in findings)
 
 
-def _known_findings(client: GitHubClient, owner: str, repo: str, number: int) -> list[KnownFinding]:
-    """What earlier Argus reviews already posted on the pull request."""
+def _known_findings(
+    client: GitHubClient, owner: str, repo: str, number: int, reviewer_login: str
+) -> list[KnownFinding]:
+    """What earlier Argus reviews already posted on the pull request.
+
+    Without a configured login there is no identity to trust, so nothing is
+    fetched and every finding is reported; the workflow sets it from the app.
+    """
+    if not reviewer_login:
+        telemetry.get_logger().info("known_findings_skipped", reason="no_reviewer_login")
+        return []
     known = known_findings_from(
-        client.pr_reviews(owner, repo, number), client.pr_review_comments(owner, repo, number)
+        client.pr_reviews(owner, repo, number),
+        client.pr_review_comments(owner, repo, number),
+        reviewer_login,
     )
-    telemetry.get_logger().info("known_findings", count=len(known))
+    telemetry.get_logger().info("known_findings", count=len(known), reviewer=reviewer_login)
     return known
 
 

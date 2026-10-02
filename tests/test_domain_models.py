@@ -237,6 +237,8 @@ def known(**overrides) -> KnownFinding:
         "file": "pkg/module.py",
         "line": 10,
         "title": "Off-by-one in loop bound",
+        "severity": "high",
+        "category": "correctness",
         "url": "https://github.com/o/r/pull/7#discussion_r1",
     }
     return KnownFinding(**{**base, **overrides})
@@ -249,13 +251,32 @@ def test_a_finding_matches_a_known_one_by_file_and_title_however_spaced_or_cased
     assert matches_known(finding(file="pkg/other.py"), [known()]) is None
 
 
-def test_a_finding_matches_a_known_one_by_file_and_line_when_the_titles_differ() -> None:
+def test_a_finding_matches_a_known_one_by_file_and_line_when_only_the_title_differs() -> None:
     reworded = known(title="Loop misses the last element")
 
     assert matches_known(finding(), [reworded]) is not None
     assert matches_known(finding(line=12), [reworded]) is not None  # within two lines
     assert matches_known(finding(line=13), [reworded]) is None
     assert matches_known(finding(), [reworded.model_copy(update={"line": None})]) is None
+
+
+def test_a_nearby_finding_of_another_kind_or_weight_is_not_the_same_claim() -> None:
+    """A low nit two lines away must never swallow a new critical finding."""
+    nit = known(title="Unused import", severity="low", category="quality")
+
+    assert matches_known(finding(severity="critical"), [nit]) is None
+    assert matches_known(finding(category="quality"), [nit]) is None  # severity differs
+    assert matches_known(finding(severity="low", category="quality"), [nit]) is not None
+    unlabeled = nit.model_copy(update={"severity": None, "category": None})
+    assert matches_known(finding(severity="low", category="quality"), [unlabeled]) is None
+
+
+def test_titles_match_however_punctuated_anywhere() -> None:
+    earlier = known(title="N+1 query: loads users one by one")
+
+    assert matches_known(finding(title="N+1 query, loads users one-by-one"), [earlier]) is not None
+    assert matches_known(finding(title="N+1 query loads users one by one!"), [earlier]) is not None
+    assert matches_known(finding(title="N+1 query loads users twice", line=50), [earlier]) is None
 
 
 def test_matches_known_returns_the_known_finding_it_matched() -> None:

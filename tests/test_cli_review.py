@@ -268,7 +268,8 @@ def test_local_mode_has_no_earlier_reviews_to_consult(stubbed: dict) -> None:
     assert stubbed["known"] == []
 
 
-def test_fail_on_ignores_findings_already_reported(stubbed: dict) -> None:
+def test_fail_on_still_counts_findings_already_reported(stubbed: dict) -> None:
+    """Reported once before is not fixed; an open critical still fails the gate."""
     stubbed["outcome"] = fake_result([finding("critical", status="known")])
 
-    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "low"]).exit_code == 0
+    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "low"]).exit_code == 3

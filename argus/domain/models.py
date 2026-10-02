@@ -8,6 +8,7 @@ Findings are frozen: a status change produces a new Finding via
 with_status(), so a stage can never mutate another stage's output.
 """
 
+import re
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
@@ -76,6 +77,8 @@ class KnownFinding(_Model):
         default=None, description="None when the comment sat in the review body or has no line."
     )
     title: str
+    severity: Severity | None = Field(default=None, description="As posted; None if unreadable.")
+    category: Category | None = Field(default=None, description="As posted; None if unreadable.")
     url: str = Field(description="Where it was posted, so a skipped finding can be found.")
 
 
@@ -84,7 +87,9 @@ def matches_known(finding: "Finding", known: Sequence["KnownFinding"]) -> "Known
 
     Same file and the same title, however spaced, cased, or punctuated, is the
     same claim even when the code has moved. Same file within a couple of lines
-    is the same claim even when the model worded the title differently.
+    is the same claim only when the kind and the weight agree too: a reworded
+    title for the same category and severity, never a low nit nearby swallowing
+    a new critical finding.
     """
     title = _normalized(finding.title)
     for earlier in known:
@@ -92,13 +97,22 @@ def matches_known(finding: "Finding", known: Sequence["KnownFinding"]) -> "Known
             continue
         if _normalized(earlier.title) == title:
             return earlier
-        if earlier.line is not None and abs(earlier.line - finding.line) <= KNOWN_LINE_TOLERANCE:
+        if (
+            earlier.line is not None
+            and abs(earlier.line - finding.line) <= KNOWN_LINE_TOLERANCE
+            and earlier.severity == finding.severity
+            and earlier.category == finding.category
+        ):
             return earlier
     return None
 
 
+_PUNCTUATION = re.compile(r"[^\w\s]")
+
+
 def _normalized(title: str) -> str:
-    return " ".join(title.lower().split()).rstrip(".,;:!")
+    """Lowercase, punctuation anywhere dropped, whitespace collapsed."""
+    return " ".join(_PUNCTUATION.sub(" ", title.lower()).split())
 
 
 class Review(_Model):

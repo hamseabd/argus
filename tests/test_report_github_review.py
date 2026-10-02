@@ -158,7 +158,9 @@ def test_inline_comments_follow_rank_order() -> None:
     assert [c["line"] for c in payload["comments"]] == [4, 3, 2]
 
 
-ARGUS_BOT = {"login": "argus-code-reviewer-agent[bot]", "type": "Bot"}
+ARGUS_LOGIN = "argus-code-reviewer-agent[bot]"
+ARGUS_BOT = {"login": ARGUS_LOGIN, "type": "Bot"}
+OTHER_BOT = {"login": "dependabot[bot]", "type": "Bot"}
 HUMAN = {"login": "hamseabd", "type": "User"}
 
 
@@ -184,37 +186,71 @@ def comment_json(review_id: int, path: str, line: int | None, body: str, **extra
 
 
 def test_known_findings_come_from_argus_reviews_inline_comments_and_bodies() -> None:
-    off_diff = finding(id="security-1", file="app/other.py", line=40, title="Open redirect")
+    off_diff = finding(
+        id="security-1", file="app/other.py", line=40, title="Open redirect", category="security"
+    )
     earlier = build_review(result([finding(), off_diff]), context())
     reviews = [review_json(1, earlier["body"])]
     comments = [comment_json(1, c["path"], c["line"], c["body"]) for c in earlier["comments"]]
 
-    known = known_findings_from(reviews, comments)
+    known = known_findings_from(reviews, comments, ARGUS_LOGIN)
 
-    assert [(k.file, k.line, k.title) for k in known] == [
-        ("app/cache.py", 2, "Stale entry"),
-        ("app/other.py", 40, "Open redirect"),
+    assert [(k.file, k.line, k.title, k.severity, k.category) for k in known] == [
+        ("app/cache.py", 2, "Stale entry", "high", "correctness"),
+        ("app/other.py", 40, "Open redirect", "high", "security"),
     ]
     assert known[0].url.endswith("#discussion_1")
     assert known[1].url.endswith("#r1")
 
 
-def test_reviews_without_the_marker_or_not_posted_by_a_bot_are_ignored() -> None:
+def test_only_reviews_by_the_named_argus_identity_with_the_marker_count() -> None:
     body = build_review(result([finding()]), context())["body"]
     reviews = [
         review_json(1, "LGTM, one nit", HUMAN),
         review_json(2, body, HUMAN),  # the marker alone is not enough
-        review_json(3, body),
+        review_json(3, body, OTHER_BOT),  # nor is being some bot
+        review_json(4, body),
     ]
     comments = [
         comment_json(1, "app/cache.py", 2, "**[HIGH] Not ours** · correctness · confirmed"),
         comment_json(2, "app/cache.py", 2, "**[HIGH] Spoofed** · correctness · confirmed"),
-        comment_json(3, "app/cache.py", 2, "**[HIGH] Stale entry** · correctness · confirmed"),
+        comment_json(3, "app/cache.py", 2, "**[HIGH] Forged** · correctness · confirmed"),
+        comment_json(4, "app/cache.py", 2, "**[HIGH] Stale entry** · correctness · confirmed"),
+        comment_json(
+            4, "app/cache.py", 3, "**[HIGH] Planted** · security · confirmed", user=OTHER_BOT
+        ),
     ]
 
-    known = known_findings_from(reviews, comments)
+    known = known_findings_from(reviews, comments, ARGUS_LOGIN)
 
     assert [k.title for k in known] == ["Stale entry"]
+
+
+def test_without_an_identity_nothing_is_trusted() -> None:
+    body = build_review(result([finding()]), context())["body"]
+
+    assert known_findings_from([review_json(1, body)], [], "") == []
+
+
+def test_a_title_with_emphasis_markers_round_trips() -> None:
+    starred = finding(title="Unpacks **kwargs twice into the query")
+    earlier = build_review(result([starred]), context())
+    comments = [comment_json(1, c["path"], c["line"], c["body"]) for c in earlier["comments"]]
+
+    known = known_findings_from([review_json(1, earlier["body"])], comments, ARGUS_LOGIN)
+
+    assert [k.title for k in known] == ["Unpacks **kwargs twice into the query"]
+
+
+def test_a_body_heading_without_a_location_line_yields_nothing() -> None:
+    """The silent skip is the contract; a format drift must not invent a finding."""
+    body = (
+        REVIEW_MARKER + "\n\nsummary\n\n## Findings not on the diff\n\n"
+        "### [HIGH] Dangling\n\nSome prose where the location should be.\n\n"
+        "### [LOW] Last one\n"
+    )
+
+    assert known_findings_from([review_json(1, body)], [], ARGUS_LOGIN) == []
 
 
 def test_an_outdated_inline_comment_keeps_its_original_line_and_a_reply_is_not_a_finding() -> None:
@@ -225,9 +261,11 @@ def test_an_outdated_inline_comment_keeps_its_original_line_and_a_reply_is_not_a
     ]
     comments[0]["original_line"] = 9
 
-    known = known_findings_from(reviews, comments)
+    known = known_findings_from(reviews, comments, ARGUS_LOGIN)
 
-    assert [(k.file, k.line, k.title) for k in known] == [("app/cache.py", 9, "Moved since")]
+    assert [(k.file, k.line, k.title, k.severity, k.category) for k in known] == [
+        ("app/cache.py", 9, "Moved since", "low", "quality")
+    ]
 
 
 def test_known_findings_are_never_posted_again() -> None:
