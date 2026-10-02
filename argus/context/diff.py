@@ -8,14 +8,20 @@ what decides whether a finding becomes an inline comment or a note in the
 review body.
 
 The parser keeps each file's raw section verbatim so the diff can be
-reassembled after the size cap drops whole files.
+reassembled after the size cap drops whole files, and after the ignore
+patterns drop the files nobody wants a model to read: minified bundles and
+other generated output.
 """
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
+from pathlib import PurePosixPath
 
 from argus.domain.errors import DiffParseError
 from argus.domain.models import ChangedFile, ChangedFileStatus
+from argus.telemetry import get_logger
 
 DIFF_SIZE_CAP = 200 * 1024
 """Bytes of diff text the lead reviewer is given at most; larger files are dropped."""
@@ -79,6 +85,46 @@ def cap_diff(files: list[FileDiff], max_bytes: int = DIFF_SIZE_CAP) -> tuple[str
     kept = "".join(f.text for i, f in enumerate(files) if i not in dropped)
     truncated = [f.path for i, f in enumerate(files) if i in dropped]
     return kept, truncated
+
+
+def matches_ignore(path: str, patterns: Iterable[str]) -> bool:
+    """Whether a repository-relative path matches any ignore pattern.
+
+    Three shapes. A pattern without a slash (`*.min.js`, `package-lock.json`)
+    matches the file's name in any directory. A pattern ending in a slash
+    (`vendor/`) matches everything under that directory at the repository
+    root, and only there: unlike .gitignore, `vendor/` does not match
+    `src/vendor/`. Any other pattern (`docs/*.md`, `generated/**/*.pb.go`) is
+    matched against the whole path with fnmatch, where `*` also crosses `/`.
+    """
+    name = PurePosixPath(path).name
+    for pattern in patterns:
+        if pattern.endswith("/"):
+            if path.startswith(pattern):
+                return True
+        elif "/" in pattern:
+            if fnmatchcase(path, pattern):
+                return True
+        elif fnmatchcase(name, pattern):
+            return True
+    return False
+
+
+def split_ignored(
+    files: Sequence[FileDiff], patterns: Sequence[str]
+) -> tuple[list[FileDiff], list[FileDiff]]:
+    """The files to review and the files an ignore pattern excludes, both in diff order.
+
+    Excluded files are logged by path: the model never sees them, so the log
+    is the only record of what the review did not cover.
+    """
+    if not patterns:
+        return list(files), []
+    kept = [f for f in files if not matches_ignore(f.path, patterns)]
+    ignored = [f for f in files if matches_ignore(f.path, patterns)]
+    if ignored:
+        get_logger().info("files_ignored", files=[f.path for f in ignored], patterns=list(patterns))
+    return kept, ignored
 
 
 def _split_lines(text: str) -> list[str]:

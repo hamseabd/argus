@@ -81,9 +81,12 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
         calls["token"] = token
         return FakeGitHub(calls)
 
-    def fake_pr_context(client, owner, repo, number, repo_root, max_bytes=0) -> ReviewContext:
+    def fake_pr_context(
+        client, owner, repo, number, repo_root, max_bytes=0, ignore=()
+    ) -> ReviewContext:
         calls["pr"] = (owner, repo, number)
         calls["root"] = repo_root
+        calls["ignore"] = ignore
         return ReviewContext(
             source="pr",
             repo_root=tmp_path,
@@ -206,3 +209,12 @@ def test_fail_on_applies_in_pr_mode(stubbed: dict) -> None:
         ).exit_code
         == 3
     )
+
+
+def test_ignore_patterns_reach_the_pull_request_context(stubbed: dict, monkeypatch) -> None:
+    monkeypatch.setenv("ARGUS_IGNORE_PATHS", "*.lock")
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r", "--ignore", "vendor/"])
+
+    assert result.exit_code == 0, result.output
+    assert tuple(stubbed["ignore"]) == ("*.lock", "vendor/")

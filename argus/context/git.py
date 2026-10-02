@@ -7,9 +7,10 @@ and Argus never touches the index of the repository it reviews.
 """
 
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
-from argus.context.diff import DIFF_SIZE_CAP, cap_diff, parse_diff
+from argus.context.diff import DIFF_SIZE_CAP, cap_diff, parse_diff, split_ignored
 from argus.domain.errors import GitError
 from argus.domain.models import ReviewContext
 
@@ -52,11 +53,18 @@ def local_diff(repo: Path, base: str = DEFAULT_BASE) -> str:
 
 
 def local_context(
-    path: Path, base: str = DEFAULT_BASE, max_bytes: int = DIFF_SIZE_CAP
+    path: Path,
+    base: str = DEFAULT_BASE,
+    max_bytes: int = DIFF_SIZE_CAP,
+    ignore: Sequence[str] = (),
 ) -> ReviewContext:
-    """Build the review context for the repository containing path."""
+    """Build the review context for the repository containing path.
+
+    Files matching an ignore pattern leave the diff before the size cap is
+    applied, so a lockfile never pushes a source file out of the review.
+    """
     root = repo_root(path)
-    files = parse_diff(local_diff(root, base))
+    files, ignored = split_ignored(parse_diff(local_diff(root, base)), ignore)
     diff_text, truncated = cap_diff(files, max_bytes)
     return ReviewContext(
         source="local",
@@ -64,6 +72,7 @@ def local_context(
         diff_text=diff_text,
         files=[f.to_changed_file() for f in files],
         truncated_files=truncated,
+        ignored_files=[f.path for f in ignored],
     )
 
 

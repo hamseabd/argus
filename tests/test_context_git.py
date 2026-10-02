@@ -163,3 +163,31 @@ def test_non_utf8_content_does_not_escape_as_a_decode_error(repo: Path) -> None:
 def test_option_like_base_is_rejected_not_interpreted(repo: Path) -> None:
     with pytest.raises(GitError):
         local_diff(repo, base="--help")
+
+
+def test_local_context_drops_ignored_files_before_the_cap_and_lists_them(repo: Path) -> None:
+    (repo / "uv.lock").write_text("version = 1\n" * 2000)
+    git(repo, "add", "uv.lock")
+    full = local_context(repo, base="main")
+
+    ctx = local_context(repo, base="main", ignore=["*.lock", "pkg/gone.py"])
+
+    assert ctx.ignored_files == ["pkg/gone.py", "uv.lock"]
+    assert [f.path for f in ctx.files] == ["pkg/module.py", "pkg/new.py", "pkg/new_name.py"]
+    assert "uv.lock" not in ctx.diff_text
+    assert "pkg/gone.py" not in ctx.diff_text
+    assert ctx.truncated_files == []
+    assert "uv.lock" in full.diff_text
+
+
+def test_an_ignored_file_does_not_count_against_the_size_cap(repo: Path) -> None:
+    (repo / "uv.lock").write_text("version = 1\n" * 2000)
+    git(repo, "add", "uv.lock")
+    small = local_context(repo, base="main", ignore=["*.lock"])
+
+    capped = local_context(
+        repo, base="main", max_bytes=len(small.diff_text.encode()), ignore=["*.lock"]
+    )
+
+    assert capped.truncated_files == []
+    assert capped.ignored_files == ["uv.lock"]
