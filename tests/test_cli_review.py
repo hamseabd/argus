@@ -70,8 +70,11 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             files=calls.get("files", [ChangedFile(path="a.py", status="modified")]),
         )
 
-    async def fake_run_review(context, agent, *, verify=True, verify_concurrency=4, run_id=None):
+    async def fake_run_review(
+        context, agent, *, verify=True, verify_concurrency=4, run_id=None, config=None
+    ):
         calls["run_id"] = run_id
+        calls["config"] = config
         calls["verify"] = verify
         calls["verify_concurrency"] = verify_concurrency
         calls["agent"] = agent
@@ -256,3 +259,45 @@ def test_a_failed_review_still_closes_the_tracing_session(
 
     assert result.exit_code == 1
     assert sessions == ["in", "out"]
+
+
+def test_the_run_config_is_built_from_the_settings_and_handed_to_the_pipeline(
+    stubbed: dict, monkeypatch
+) -> None:
+    monkeypatch.setenv("ARGUS_LEAD_EFFORT", "low")
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    config = stubbed["config"]
+    assert config.lead_effort == "low"
+    assert len(config.prompts_sha) == 12
+
+
+def test_summary_is_appended_to_the_given_file(stubbed: dict, tmp_path: Path) -> None:
+    stubbed["outcome"] = fake_result([finding("high")])
+    summary = tmp_path / "step" / "summary.md"
+    summary.parent.mkdir()
+    summary.write_text("# earlier step\n")
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--summary", str(summary)])
+
+    assert result.exit_code == 0, result.output
+    text = summary.read_text()
+    assert text.startswith("# earlier step\n")
+    assert "## Argus review" in text
+    assert "high problem" in text
+
+
+def test_summary_is_written_even_when_the_severity_gate_trips(
+    stubbed: dict, tmp_path: Path
+) -> None:
+    stubbed["outcome"] = fake_result([finding("high")])
+    summary = tmp_path / "summary.md"
+
+    result = runner.invoke(
+        cli.app, ["review", "--diff", "--summary", str(summary), "--fail-on", "high"]
+    )
+
+    assert result.exit_code == cli.EXIT_GATE
+    assert "## Argus review" in summary.read_text()

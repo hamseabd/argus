@@ -19,6 +19,7 @@ from argus.domain.models import (
     Review,
     ReviewContext,
     ReviewResult,
+    RunConfig,
     StageMetrics,
     Status,
     Verdict,
@@ -60,11 +61,14 @@ async def run_review(
     verify: bool = True,
     verify_concurrency: int = DEFAULT_VERIFY_CONCURRENCY,
     run_id: str | None = None,
+    config: RunConfig | None = None,
 ) -> ReviewResult:
     """Run the review stage, verify each finding, and return everything produced.
 
     Pass run_id when the caller already bound one for its own log events;
     contextvars bound inside this coroutine do not reach the caller's context.
+    Pass config, what shaped the agent, and it travels with the result, the
+    run_start event, and the trace, so runs can be told apart by what they ran.
     The whole run is one trace: argus.run, with a span per stage under it.
     """
     run_id = run_id or new_run_id()
@@ -74,9 +78,10 @@ async def run_review(
         pr=context.pr.number if context.pr else None,
         head_sha=context.pr.head_sha if context.pr else None,
         verify=verify,
+        **_config_fields(config),
     )
     with span("argus.run", "chain", attributes=attributes) as run_span:
-        result = await _run_review(context, agent, verify, verify_concurrency, run_id)
+        result = await _run_review(context, agent, verify, verify_concurrency, run_id, config)
         findings = result.review.findings
         run_span.set_attributes(
             meta(
@@ -95,6 +100,7 @@ async def _run_review(
     verify: bool,
     verify_concurrency: int,
     run_id: str,
+    config: RunConfig | None,
 ) -> ReviewResult:
     log = get_logger()
     started = time.monotonic()
@@ -106,6 +112,7 @@ async def _run_review(
         truncated_files=len(context.truncated_files),
         pr=context.pr.number if context.pr else None,
         verify=verify,
+        **({"config": config.fingerprint, "prompts": config.prompts_sha} if config else {}),
     )
     with span("argus.review", "chain") as stage:
         reviewed = await agent.review(context)
@@ -143,7 +150,21 @@ async def _run_review(
         total_cost_usd=total_cost,
         duration_ms=duration_ms,
         session_id=reviewed.session_id,
+        config=config,
     )
+
+
+def _config_fields(config: RunConfig | None) -> dict[str, object]:
+    """What the trace records of the configuration: the digests and the models."""
+    if config is None:
+        return {}
+    return {
+        "config": config.fingerprint,
+        "prompts_sha": config.prompts_sha,
+        "lead_model": config.lead_model,
+        "specialist_model": config.specialist_model,
+        "verifier_model": config.verifier_model,
+    }
 
 
 async def _verify_all(

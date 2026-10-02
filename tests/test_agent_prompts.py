@@ -1,6 +1,13 @@
+import hashlib
 from pathlib import Path
 
-from argus.agent.prompts import PROMPT_NAMES, lead_user_prompt, load_prompt, verifier_user_prompt
+from argus.agent.prompts import (
+    PROMPT_NAMES,
+    lead_user_prompt,
+    load_prompt,
+    prompts_digest,
+    verifier_user_prompt,
+)
 from argus.domain.models import ChangedFile, Finding, PRInfo, ReviewContext
 
 FIXTURES = Path(__file__).parent / "fixtures" / "diffs"
@@ -141,3 +148,28 @@ def test_verifier_user_prompt_carries_the_finding_and_its_hunk() -> None:
         "```diff",
     ):
         assert expected in text
+
+
+def test_prompts_digest_covers_every_prompt_file_in_a_fixed_order() -> None:
+    expected = hashlib.sha256()
+    for name in PROMPT_NAMES:
+        expected.update(f"{name}\n".encode())
+        expected.update(load_prompt(name).encode())
+        expected.update(b"\n")
+
+    digest = prompts_digest()
+
+    assert digest == expected.hexdigest()[:12]
+    assert prompts_digest() == digest
+
+
+def test_prompts_digest_changes_when_a_prompt_changes(monkeypatch) -> None:
+    import argus.agent.prompts as prompts
+
+    before = prompts_digest()
+    original = prompts.load_prompt
+    monkeypatch.setattr(
+        prompts, "load_prompt", lambda name: original(name) + ("!" if name == "lead" else "")
+    )
+
+    assert prompts_digest() != before

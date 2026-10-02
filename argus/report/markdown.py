@@ -78,6 +78,9 @@ def render_footer(result: ReviewResult) -> str:
     if recovered:
         parts.append(f"{_plural(recovered, 'answer')} recovered")
     parts.append(f"session {result.session_id}")
+    if result.config is not None:
+        parts.append(f"prompts {result.config.prompts_sha}")
+        parts.append(f"config {result.config.fingerprint}")
     footer = " · ".join(parts)
     review_stage = next((m for m in metrics if m.stage == "review"), None)
     if review_stage and review_stage.agents:

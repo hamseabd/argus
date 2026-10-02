@@ -8,6 +8,8 @@ Findings are frozen: a status change produces a new Finding via
 with_status(), so a stage can never mutate another stage's output.
 """
 
+import hashlib
+import json
 from collections import Counter
 from pathlib import Path
 from typing import Any, Literal
@@ -155,6 +157,52 @@ class StageMetrics(_Model):
     )
 
 
+FINGERPRINT_CHARS = 12
+_UNFINGERPRINTED = frozenset({"fingerprint", "argus_version"})
+
+
+class RunConfig(_Model):
+    """What shaped a run, so two runs can be compared and one can be reproduced.
+
+    The models, efforts, and caps come from the settings; prompts_sha digests
+    the prompt files; fingerprint digests all of that together, so the same
+    value on two runs means the same prompts and the same knobs. The Argus
+    version is recorded but left out of the fingerprint: a release that
+    changes neither should compare equal.
+    """
+
+    argus_version: str
+    prompts_sha: str = Field(description="Digest of every prompt file, in a fixed order.")
+    lead_model: str
+    lead_effort: str
+    lead_max_turns: int
+    lead_read_budget: int
+    lead_max_budget_usd: float
+    lead_max_answer_holds: int
+    specialist_model: str
+    specialist_effort: str
+    specialist_max_turns: int
+    verifier_model: str
+    verifier_effort: str
+    verifier_max_turns: int
+    verifier_max_budget_usd: float
+    verify_concurrency: int
+    diff_size_cap: int
+    fingerprint: str = Field(
+        default="",
+        description="Digest of every field but argus_version; computed when not given.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_fingerprint(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("fingerprint"):
+            return data
+        material = {k: v for k, v in data.items() if k not in _UNFINGERPRINTED}
+        digest = hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode())
+        return {**data, "fingerprint": digest.hexdigest()[:FINGERPRINT_CHARS]}
+
+
 class ReviewResult(_Model):
     """Everything a run produced, serialised as the JSON artifact."""
 
@@ -164,6 +212,9 @@ class ReviewResult(_Model):
     total_cost_usd: float = Field(ge=0.0, description="Every query, failed ones included.")
     duration_ms: int = Field(default=0, ge=0, description="Wall-clock time of the whole run.")
     session_id: str
+    config: RunConfig | None = Field(
+        default=None, description="What shaped the run; None for a result built elsewhere."
+    )
 
 
 ChangedFileStatus = Literal["added", "modified", "removed", "renamed"]

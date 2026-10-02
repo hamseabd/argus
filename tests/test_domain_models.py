@@ -11,6 +11,7 @@ from argus.domain.models import (
     Review,
     ReviewContext,
     ReviewResult,
+    RunConfig,
     StageMetrics,
     Verdict,
     rank_findings,
@@ -222,3 +223,62 @@ def test_rank_returns_a_new_list_and_leaves_input_alone() -> None:
 
     assert len(findings) == 2
     assert ranked is not findings
+
+
+def run_config(**overrides) -> RunConfig:
+    base = dict(
+        argus_version="0.1.0",
+        prompts_sha="0123456789ab",
+        lead_model="claude-opus-5",
+        lead_effort="high",
+        lead_max_turns=40,
+        lead_read_budget=10,
+        lead_max_budget_usd=3.0,
+        lead_max_answer_holds=3,
+        specialist_model="claude-sonnet-5",
+        specialist_effort="medium",
+        specialist_max_turns=25,
+        verifier_model="claude-sonnet-5",
+        verifier_effort="medium",
+        verifier_max_turns=10,
+        verifier_max_budget_usd=0.5,
+        verify_concurrency=4,
+        diff_size_cap=204800,
+    )
+    return RunConfig(**{**base, **overrides})
+
+
+def test_run_config_fingerprint_is_filled_in_and_stable() -> None:
+    config = run_config()
+
+    assert len(config.fingerprint) == 12
+    assert int(config.fingerprint, 16) >= 0
+    assert run_config().fingerprint == config.fingerprint
+
+
+def test_run_config_fingerprint_changes_with_a_prompt_or_a_knob_but_not_the_version() -> None:
+    config = run_config()
+
+    assert run_config(prompts_sha="ba9876543210").fingerprint != config.fingerprint
+    assert run_config(lead_effort="low").fingerprint != config.fingerprint
+    assert run_config(verifier_max_turns=11).fingerprint != config.fingerprint
+    assert run_config(argus_version="9.9.9").fingerprint == config.fingerprint
+
+
+def test_run_config_round_trips_through_its_own_dump() -> None:
+    config = run_config()
+
+    restored = RunConfig.model_validate(config.model_dump())
+
+    assert restored == config
+    assert restored.fingerprint == config.fingerprint
+
+
+def test_review_result_carries_an_optional_config() -> None:
+    review = Review(summary="s", findings=[], files_reviewed=[])
+    without = ReviewResult(review=review, verdicts=[], metrics=[], total_cost_usd=0, session_id="s")
+    with_config = without.model_copy(update={"config": run_config()})
+
+    assert without.config is None
+    assert with_config.config is not None
+    assert with_config.config.lead_model == "claude-opus-5"

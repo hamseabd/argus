@@ -9,6 +9,7 @@ import typer
 from pydantic import ValidationError
 
 from argus import __version__, telemetry, tracing
+from argus.agent.prompts import prompts_digest
 from argus.auth import credential_problem, credential_source
 from argus.context.git import head_sha, local_context, repo_root
 from argus.context.github import GitHubClient, parse_repo, pr_context, repo_from_remote
@@ -17,6 +18,7 @@ from argus.domain.models import SEVERITY_ORDER, Finding, ReviewContext, ReviewRe
 from argus.pipeline import run_review
 from argus.report.github_review import build_review
 from argus.report.markdown import render_report
+from argus.report.summary import render_summary
 from argus.settings import Settings
 
 EXIT_ERROR = 1
@@ -59,6 +61,13 @@ def review(
     ] = False,
     json_path: Annotated[
         Path | None, typer.Option("--json", help="Write the ReviewResult here.")
+    ] = None,
+    summary_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--summary",
+            help="Append a Markdown run summary here (for example $GITHUB_STEP_SUMMARY).",
+        ),
     ] = None,
     no_verify: Annotated[bool, typer.Option("--no-verify", help="Skip the verify stage.")] = False,
     fail_on: Annotated[
@@ -113,15 +122,20 @@ def review(
                     verify=not no_verify,
                     verify_concurrency=settings.verify_concurrency,
                     run_id=run_id,
+                    config=settings.run_config(prompts_digest()),
                 )
             )
         except ArgusError as exc:
             _fail(str(exc))
         if json_path is not None:
             _write_json(json_path, result)
+        if summary_path is not None:
+            _append_summary(summary_path, render_summary(result, context))
         typer.echo(render_report(result), nl=False)
         if post and github is not None:
-            _post_review(github[0], context, result)
+            url = _post_review(github[0], context, result)
+            if summary_path is not None:
+                _append_summary(summary_path, f"Posted: {url}\n")
     if fail_on is not None and gate_tripped(result.review.findings, fail_on):
         raise typer.Exit(EXIT_GATE)
 
@@ -169,7 +183,7 @@ def _warn_on_head_mismatch(context: ReviewContext) -> None:
         telemetry.get_logger().warning("head_mismatch", local=local, pr_head=context.pr.head_sha)
 
 
-def _post_review(client: GitHubClient, context: ReviewContext, result: ReviewResult) -> None:
+def _post_review(client: GitHubClient, context: ReviewContext, result: ReviewResult) -> str:
     payload = build_review(result, context)
     if context.pr is None:  # build_review already refused this; keep the type checker happy
         _fail("cannot post a review without a pull request")
@@ -179,12 +193,21 @@ def _post_review(client: GitHubClient, context: ReviewContext, result: ReviewRes
         _fail(str(exc))
     telemetry.get_logger().info("review_posted", url=url, inline=len(payload["comments"]))
     typer.echo(f"Posted review: {url}")
+    return url
 
 
 def _write_json(path: Path, result: ReviewResult) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(result.model_dump_json(indent=2) + "\n")
     telemetry.get_logger().info("artifact_written", path=str(path))
+
+
+def _append_summary(path: Path, text: str) -> None:
+    """Add to the summary file, never replace it: a job's earlier steps may have written there."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as out:
+        out.write(text)
+    telemetry.get_logger().info("summary_written", path=str(path))
 
 
 def _settings_problem(exc: ValidationError) -> str:

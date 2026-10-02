@@ -25,7 +25,7 @@ The verifier confirmed it, and the fix landed with a test before merge.
 - **Verifies before it reports.** Every finding gets its own fresh verifier query whose only job is to refute it by reading the code. Rejected findings are dropped; failed verifications are reported as `unverified`, never as confirmed.
 - **Posts inline.** A finding lands as a review comment on its line when that line is in the diff, otherwise in the review body. The review never requests changes; merge gating is the CLI exit code.
 - **Never touches the repository.** Reviewers get `Read`, `Grep`, `Glob`, `Agent`, and one custom read-only tool served by an in-process MCP server. Mutating tools are removed from the tool set and denied again by a `PreToolUse` hook, so the guardrail is layered, not a prompt instruction.
-- **Explains itself.** Structured JSON telemetry carries cost, tokens, turns, duration, subagent count, rejected structured outputs, and held and recovered answers per stage, plus a tool-call audit trail, under one `run_id`. The review stage is attributed per agent: turns, tool calls, tokens, and duration for the lead and each specialist, in the JSON artifact and the report footer. With an OTLP endpoint set, each review is also one OpenTelemetry trace: the run, the review and each verification, and under them every model turn and tool call of the lead and each specialist, with tokens; see [Tracing](#tracing).
+- **Explains itself.** Structured JSON telemetry carries cost, tokens, turns, duration, subagent count, rejected structured outputs, and held and recovered answers per stage, plus a tool-call audit trail, under one `run_id`. The review stage is attributed per agent: turns, tool calls, tokens, and duration for the lead and each specialist, in the JSON artifact and the report footer. With an OTLP endpoint set, each review is also one OpenTelemetry trace: the run, the review and each verification, and under them every model turn and tool call of the lead and each specialist, with tokens; see [Tracing](#tracing). Every run records what shaped it, the models, efforts, caps, and a digest of the prompts, as a `config` fingerprint in the artifact, the log, the trace, and the report footer, so two reviews can be told apart by what they ran. With `--summary`, the run also lands on the CI job page: counts, findings, cost per stage, and the per-agent table.
 
 ## Design decisions
 
@@ -99,7 +99,7 @@ If the query still ends in plain text or over its budget after the SDK accepted 
 Held and recovered answers are counted in the stage metrics and the report footer.
 3. **Verify.** Each finding runs in its own verifier query with only the finding and its diff hunk. The verifier confirms only if the code path actually exhibits the issue. At most four run at once.
 4. **Rank.** Rejected findings are dropped. The rest are ordered confirmed before unverified, then by severity, then by path.
-5. **Report.** Markdown in the terminal, a JSON artifact with `--json`, and with `--post` a GitHub review with inline comments.
+5. **Report.** Markdown in the terminal, a JSON artifact with `--json`, a Markdown run summary appended to a file with `--summary` (the workflow passes `$GITHUB_STEP_SUMMARY`), and with `--post` a GitHub review with inline comments.
 
 ### Read-only guarantees
 
@@ -155,6 +155,7 @@ argus review --diff --json argus-review.json --fail-on high
 | `--base REF` | Base for `--diff`. Default `main`. |
 | `--post` | Post the review on the pull request. Needs `--pr` and `GITHUB_TOKEN`. |
 | `--json PATH` | Write the full `ReviewResult`, written before posting so a posting failure still leaves the record. |
+| `--summary PATH` | Append a Markdown run summary: the pull request, the counts, the findings, cost by stage, the agents, and the configuration. Written before posting; the posted review's URL is added after. |
 | `--no-verify` | Skip the verify stage; every finding is reported as `unverified`. |
 | `--fail-on SEVERITY` | Exit 3 if any confirmed or unverified finding is at or above `critical`, `high`, `medium`, or `low`. |
 
@@ -184,6 +185,7 @@ argus review --diff --base main
 It does not run on every push, so a busy branch neither burns quota nor stacks duplicate reviews.
 Pull requests from forks and from Dependabot are skipped, because GitHub gives neither any secrets; a maintainer can still review one on demand.
 The review is posted by a GitHub App named Argus, through a short-lived installation token minted just before the review step and revoked when the job ends, so it appears under Argus's own identity and the workflow's own token stays read-only.
+The run's summary is on the job's page in Actions, under the step summary: the findings, cost by stage and by agent, and the configuration fingerprint, without opening the artifact.
 The workflow needs three repository secrets: `CLAUDE_CODE_OAUTH_TOKEN`, and the app's `ARGUS_APP_ID` and `ARGUS_APP_PRIVATE_KEY`.
 An optional fourth, `LANGSMITH_API_KEY`, traces each review to LangSmith; without it nothing is exported.
 The app needs `Pull requests: Read and write` and `Contents: Read-only`, and must be installed on the repository.

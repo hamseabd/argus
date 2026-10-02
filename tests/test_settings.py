@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from argus import __version__
 from argus.context.diff import DIFF_SIZE_CAP
 from argus.settings import Settings
 
@@ -65,3 +66,18 @@ def test_the_answer_hold_limit_is_env_overridable(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("ARGUS_LEAD_MAX_ANSWER_HOLDS", "5")
 
     assert Settings(_env_file=None).lead_max_answer_holds == 5
+
+
+def test_run_config_describes_the_settings_and_the_prompts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ARGUS_LEAD_EFFORT", "low")
+    monkeypatch.setenv("ARGUS_VERIFY_CONCURRENCY", "2")
+
+    config = Settings(_env_file=None).run_config(prompts_sha="0123456789ab")
+
+    assert config.prompts_sha == "0123456789ab"
+    assert config.lead_model == "claude-opus-5"
+    assert config.lead_effort == "low"
+    assert config.verify_concurrency == 2
+    assert config.diff_size_cap == DIFF_SIZE_CAP
+    assert config.argus_version == __version__
+    assert len(config.fingerprint) == 12
