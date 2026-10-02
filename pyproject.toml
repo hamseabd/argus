@@ -24,6 +24,7 @@ argus = "argus.cli:app"
 [dependency-groups]
 dev = [
     "jsonschema>=4.23",
+    "mypy>=1.19",
     "pytest>=8.4",
     "pyyaml>=6",
     "respx>=0.22",
@@ -43,6 +44,11 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "N", "RUF"]
+
+[tool.mypy]
+files = ["argus"]
+python_version = "3.12"
+strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -9,7 +9,7 @@ module carries them without threading a logger through the call stack.
 import logging
 import secrets
 import sys
-from typing import IO, Literal
+from typing import IO, Literal, TextIO
 
 import structlog
 
@@ -42,7 +42,7 @@ class _CurrentStderr:
 
 
 def configure(
-    log_format: LogFormat = "auto", stream: IO[str] | None = None, level: LogLevel = "info"
+    log_format: LogFormat = "auto", stream: TextIO | None = None, level: LogLevel = "info"
 ) -> None:
     """Configure structlog for the process; safe to call more than once."""
     out = sys.stderr if stream is None else stream
@@ -74,4 +74,5 @@ def bind_run(**fields: str) -> None:
 
 
 def get_logger() -> structlog.typing.FilteringBoundLogger:
-    return structlog.get_logger()
+    logger: structlog.typing.FilteringBoundLogger = structlog.get_logger()
+    return logger

@@ -54,7 +54,8 @@ def output_format(schema: dict[str, Any]) -> dict[str, Any]:
 
 def _strict(schema: dict[str, Any]) -> dict[str, Any]:
     definitions = schema.pop("$defs", {})
-    return _rewrite(deepcopy(schema), definitions)
+    rewritten: dict[str, Any] = _rewrite(deepcopy(schema), definitions)
+    return rewritten
 
 
 def _rewrite(node: Any, definitions: dict[str, Any]) -> Any:
