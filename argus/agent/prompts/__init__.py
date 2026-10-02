@@ -37,8 +37,8 @@ def lead_user_prompt(context: ReviewContext) -> str:
     if context.ignored_files:
         parts.append(
             "## Files excluded from the review\n\n"
-            "These changed too but match an ignore pattern (lockfiles, generated output); "
-            "they are not in the diff and need no reading:\n\n"
+            "These changed too but match an ignore pattern, so they are not in the diff "
+            "and were left out on purpose; do not spend your reads on them:\n\n"
             + "\n".join(f"- {path}" for path in context.ignored_files)
         )
     parts.append("## Diff\n\n```diff\n" + context.diff_text.rstrip("\n") + "\n```")

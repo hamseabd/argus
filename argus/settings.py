@@ -19,8 +19,14 @@ LogLevel = Literal["debug", "info", "warning"]
 
 DEFAULT_ANSWER_HOLDS = 3
 """Times the lead's answer may be held in one query before it goes through regardless."""
-DEFAULT_IGNORE_PATHS = "*.lock,package-lock.json,pnpm-lock.yaml,go.sum,*.min.js,*.min.css"
-"""Lockfiles and minified bundles: generated, large, and never worth a model's reading."""
+DEFAULT_IGNORE_PATHS = "*.min.js,*.min.css"
+"""Minified bundles: generated and unreadable as a diff.
+
+Lockfiles are deliberately not here. They are large and tedious, but a
+dependency substitution or a changed integrity hash hides in exactly one,
+and a reviewer that skips them by default would miss it; add `*.lock` to
+ARGUS_IGNORE_PATHS to opt out for a repository that reviews them elsewhere.
+"""
 
 
 class Settings(BaseSettings):
@@ -56,8 +62,8 @@ class Settings(BaseSettings):
         default=DEFAULT_IGNORE_PATHS,
         description=(
             "Comma-separated patterns for changed files to leave out of the review: "
-            "a file name or glob (*.lock), a directory (vendor/), or a path glob (docs/*.md). "
-            "Empty turns the filter off."
+            "a file name or glob (*.min.js) in any directory, a directory at the repository "
+            "root (vendor/), or a path glob (docs/*.md). Empty turns the filter off."
         ),
     )
 

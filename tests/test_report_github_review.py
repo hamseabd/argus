@@ -156,3 +156,13 @@ def test_inline_comments_follow_rank_order() -> None:
     payload = build_review(result([low, crit, high]), context())
 
     assert [c["line"] for c in payload["comments"]] == [4, 3, 2]
+
+
+def test_the_body_names_the_files_the_review_left_out() -> None:
+    ctx = context().model_copy(update={"ignored_files": ["uv.lock", "dist/app.min.js"]})
+
+    body = build_review(result([finding()]), ctx)["body"]
+    plain = build_review(result([finding()]), context())["body"]
+
+    assert "Not reviewed, ignored by pattern: `uv.lock`, `dist/app.min.js`." in body
+    assert "Not reviewed" not in plain

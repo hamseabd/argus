@@ -31,7 +31,7 @@ def build_review(result: ReviewResult, context: ReviewContext) -> dict[str, Any]
     return {
         "commit_id": context.pr.head_sha,
         "event": REVIEW_EVENT,
-        "body": _body(result, in_body),
+        "body": _body(result, in_body, context.ignored_files),
         "comments": comments,
     }
 
@@ -50,8 +50,13 @@ def _comment(finding: Finding, lines: frozenset[int]) -> dict[str, Any]:
     return comment
 
 
-def _body(result: ReviewResult, in_body: list[Finding]) -> str:
+def _body(result: ReviewResult, in_body: list[Finding], ignored: list[str]) -> str:
     parts = [REVIEW_MARKER, result.review.summary.strip(), render_counts(result.review.findings)]
+    if ignored:
+        # Said on the pull request, not only in the log: a reader should see
+        # what the review did not cover, whatever the file was named.
+        names = ", ".join(f"`{path}`" for path in ignored)
+        parts.append(f"Not reviewed, ignored by pattern: {names}.")
     if in_body:
         parts.append("## Findings not on the diff")
         parts.extend(render_finding(f, heading="###") for f in in_body)

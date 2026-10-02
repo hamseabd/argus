@@ -9,8 +9,8 @@ review body.
 
 The parser keeps each file's raw section verbatim so the diff can be
 reassembled after the size cap drops whole files, and after the ignore
-patterns drop the files nobody wants a model to read: lockfiles, minified
-bundles, generated output.
+patterns drop the files nobody wants a model to read: minified bundles and
+other generated output.
 """
 
 import re
@@ -90,12 +90,12 @@ def cap_diff(files: list[FileDiff], max_bytes: int = DIFF_SIZE_CAP) -> tuple[str
 def matches_ignore(path: str, patterns: Iterable[str]) -> bool:
     """Whether a repository-relative path matches any ignore pattern.
 
-    Three shapes, chosen so the common cases read like .gitignore:
-    a pattern without a slash (`*.lock`, `package-lock.json`) matches the
-    file's name in any directory; a pattern ending in a slash (`vendor/`)
-    matches everything under that directory at the repository root; any
-    other pattern (`docs/*.md`, `generated/**/*.pb.go`) is matched against the
-    whole path with fnmatch, where `*` also crosses `/`.
+    Three shapes. A pattern without a slash (`*.min.js`, `package-lock.json`)
+    matches the file's name in any directory. A pattern ending in a slash
+    (`vendor/`) matches everything under that directory at the repository
+    root, and only there: unlike .gitignore, `vendor/` does not match
+    `src/vendor/`. Any other pattern (`docs/*.md`, `generated/**/*.pb.go`) is
+    matched against the whole path with fnmatch, where `*` also crosses `/`.
     """
     name = PurePosixPath(path).name
     for pattern in patterns:

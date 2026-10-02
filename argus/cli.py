@@ -66,6 +66,7 @@ def review(
             "--ignore",
             help=(
                 "Leave changed files matching this pattern out of the review; repeatable. "
+                "A name or glob matches in any directory, `dir/` only at the repository root. "
                 "Adds to ARGUS_IGNORE_PATHS."
             ),
         ),

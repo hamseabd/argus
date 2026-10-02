@@ -277,7 +277,7 @@ def test_the_default_ignore_patterns_reach_the_context(stubbed: dict) -> None:
     result = runner.invoke(cli.app, ["review", "--diff"])
 
     assert result.exit_code == 0, result.output
-    assert "*.lock" in stubbed["ignore"]
+    assert "*.min.js" in stubbed["ignore"]
 
 
 def test_a_diff_that_is_entirely_ignored_says_so(stubbed: dict) -> None:

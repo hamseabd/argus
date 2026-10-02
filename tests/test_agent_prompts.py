@@ -156,4 +156,5 @@ def test_lead_user_prompt_lists_ignored_files_as_excluded_not_to_be_read() -> No
     assert "- uv.lock" in text
     assert "- web/package-lock.json" in text
     assert "not in the diff" in text
+    assert "need no reading" not in text
     assert "excluded" not in plain

@@ -87,7 +87,7 @@ That boundary is enforced by a test: a source scan proves only `argus/agent/` me
 
 ### How a review runs
 
-1. **Context.** PR mode fetches the diff, changed files, and metadata from the GitHub REST API. Local mode diffs from the merge base with the base branch to the working tree. Files matching an ignore pattern leave the diff first: lockfiles and minified bundles by default (`ARGUS_IGNORE_PATHS`, plus `--ignore` for one run), since they are generated, large, and never worth a model's reading; the lead is told they changed and that they need no reading. Then files are dropped from what remains, largest first, until it fits the context budget; the lead is told which ones to read directly.
+1. **Context.** PR mode fetches the diff, changed files, and metadata from the GitHub REST API. Local mode diffs from the merge base with the base branch to the working tree. Files matching an ignore pattern leave the diff first: minified bundles by default (`ARGUS_IGNORE_PATHS`, plus `--ignore` for one run), since a minified file cannot be read as a diff; the lead is told they changed and not to spend its reads on them, and the posted review names them as not reviewed, so a file cannot drop out of sight by its name alone. Then files are dropped from what remains, largest first, until it fits the context budget; the lead is told which ones to read directly.
 2. **Review.** The lead gets the change and must delegate to all three specialists in one turn. Each specialist returns a JSON array of findings.
 The lead merges them and answers with a `Review` as structured output, validated by the SDK against a JSON Schema derived from the domain model and re-validated by Pydantic. The schema puts a length floor on the summary (and on the verifier's reasoning), so a placeholder that merely fits the shape is rejected and the model has to write the real thing; how many outputs were rejected before one validated is part of every stage's metrics.
 The lead gets a small budget of its own reads (ten), enforced by a hook: once it runs out, reading is refused and the only move left is to answer. The budget never refuses delegation or the answer itself.
@@ -155,14 +155,14 @@ argus review --diff --json argus-review.json --fail-on high
 | `--base REF` | Base for `--diff`. Default `main`. |
 | `--post` | Post the review on the pull request. Needs `--pr` and `GITHUB_TOKEN`. |
 | `--json PATH` | Write the full `ReviewResult`, written before posting so a posting failure still leaves the record. |
-| `--ignore PATTERN` | Leave changed files matching the pattern out of the review; repeatable, added to `ARGUS_IGNORE_PATHS`. A name or glob (`*.lock`) matches in any directory, `vendor/` matches a directory, and `docs/*.md` matches a path. |
+| `--ignore PATTERN` | Leave changed files matching the pattern out of the review; repeatable, added to `ARGUS_IGNORE_PATHS`. A name or glob (`*.lock`) matches in any directory, `vendor/` matches that directory at the repository root only, and `docs/*.md` matches a path. |
 | `--no-verify` | Skip the verify stage; every finding is reported as `unverified`. |
 | `--fail-on SEVERITY` | Exit 3 if any confirmed or unverified finding is at or above `critical`, `high`, `medium`, or `low`. |
 
 Exit codes: `0` success, `1` error, `2` bad command line, `3` severity gate tripped.
 
 Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` environment variables (`ARGUS_LEAD_MODEL`, `ARGUS_VERIFY_CONCURRENCY`, `ARGUS_LOG_FORMAT`, `ARGUS_LOG_LEVEL`, and so on; see `argus/settings.py`).
-`ARGUS_IGNORE_PATHS` is the comma-separated ignore list; its default is `*.lock,package-lock.json,pnpm-lock.yaml,go.sum,*.min.js,*.min.css`, and an empty value turns the filter off. Ignored files are logged as `files_ignored`, and a change made only of ignored files fails before any query with a message that names them.
+`ARGUS_IGNORE_PATHS` is the comma-separated ignore list; its default is `*.min.js,*.min.css`, and an empty value turns the filter off. Lockfiles are not ignored by default on purpose: a dependency substitution or a changed integrity hash hides in exactly one, and a review that skipped them would miss a supply-chain change; add `*.lock,package-lock.json,pnpm-lock.yaml,go.sum` for a repository that reviews dependencies elsewhere. Ignored files are logged as `files_ignored` and named in the posted review, and a change made only of ignored files fails before any query with a message that names them.
 
 ### Tracing
 
