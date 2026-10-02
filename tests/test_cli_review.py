@@ -289,6 +289,47 @@ def test_summary_is_appended_to_the_given_file(stubbed: dict, tmp_path: Path) ->
     assert "high problem" in text
 
 
+def test_summary_defaults_to_the_actions_step_summary_file(
+    stubbed: dict, tmp_path: Path, monkeypatch
+) -> None:
+    """In Actions the job page gets the summary without a flag, so the workflow needs none.
+
+    That matters for the dogfood run, which takes its workflow file from the
+    pull request but installs Argus from main.
+    """
+    summary = tmp_path / "step_summary"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert "## Argus review" in summary.read_text()
+
+
+def test_an_explicit_summary_path_wins_over_the_environment(
+    stubbed: dict, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "env"))
+    chosen = tmp_path / "chosen.md"
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--summary", str(chosen)])
+
+    assert result.exit_code == 0, result.output
+    assert "## Argus review" in chosen.read_text()
+    assert not (tmp_path / "env").exists()
+
+
+def test_no_summary_is_written_outside_actions_without_the_flag(
+    stubbed: dict, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_summary_is_written_even_when_the_severity_gate_trips(
     stubbed: dict, tmp_path: Path
 ) -> None:

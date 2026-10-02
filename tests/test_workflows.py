@@ -40,12 +40,6 @@ def test_review_job_has_a_timeout() -> None:
     assert 0 < load("review.yml")["jobs"]["review"]["timeout-minutes"] <= 60
 
 
-def test_review_step_writes_the_run_summary_to_the_job_summary() -> None:
-    review = next(s for s in steps("review.yml", "review") if s.get("name") == "Review")
-
-    assert '--summary "$GITHUB_STEP_SUMMARY"' in review["run"]
-
-
 def test_review_skips_drafts_and_fork_pull_requests() -> None:
     condition = load("review.yml")["jobs"]["review"]["if"]
 

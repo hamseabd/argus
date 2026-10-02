@@ -24,6 +24,7 @@ from argus.settings import Settings
 EXIT_ERROR = 1
 EXIT_USAGE = 2  # Click's own code for a bad command line; kept distinct from the gate
 EXIT_GATE = 3
+STEP_SUMMARY_VAR = "GITHUB_STEP_SUMMARY"
 
 app = typer.Typer(
     help="Argus: a code-review agent on the Claude Agent SDK.",
@@ -66,7 +67,7 @@ def review(
         Path | None,
         typer.Option(
             "--summary",
-            help="Append a Markdown run summary here (for example $GITHUB_STEP_SUMMARY).",
+            help="Append a Markdown run summary here. Defaults to $GITHUB_STEP_SUMMARY when set.",
         ),
     ] = None,
     no_verify: Annotated[bool, typer.Option("--no-verify", help="Skip the verify stage.")] = False,
@@ -100,6 +101,7 @@ def review(
     telemetry.configure(settings.log_format, level=settings.log_level)
     telemetry.bind_run(run_id=run_id)
     _check_credentials()
+    summary_path = summary_path or _step_summary_from_env()
     github = _github_target(pr, repo) if pr is not None else None
 
     with tracing.session():
@@ -200,6 +202,12 @@ def _write_json(path: Path, result: ReviewResult) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(result.model_dump_json(indent=2) + "\n")
     telemetry.get_logger().info("artifact_written", path=str(path))
+
+
+def _step_summary_from_env() -> Path | None:
+    """GitHub Actions names the job page's summary file; a run there fills it in unasked."""
+    value = os.environ.get(STEP_SUMMARY_VAR, "").strip()
+    return Path(value) if value else None
 
 
 def _append_summary(path: Path, text: str) -> None:
