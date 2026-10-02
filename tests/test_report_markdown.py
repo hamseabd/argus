@@ -7,7 +7,7 @@ from argus.domain.models import (
     StageMetrics,
     Verdict,
 )
-from argus.report.markdown import render_report
+from argus.report.markdown import plural, render_report
 
 
 def result(findings: list[Finding], verdicts: list[Verdict] | None = None) -> ReviewResult:
@@ -224,3 +224,11 @@ def test_footer_names_the_prompts_and_config_digests_when_the_result_carries_the
         f"· session sess-1 · prompts 0123456789ab · config {config.fingerprint}"
         in render_report(described)
     )
+
+
+def test_plural_is_shared_by_the_report_and_the_summary() -> None:
+    from argus.report import summary
+
+    assert plural(1, "turn") == "turn"
+    assert plural(2, "turn") == "turns"
+    assert summary.plural is plural

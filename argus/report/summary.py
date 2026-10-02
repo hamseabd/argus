@@ -6,8 +6,10 @@ configuration produced it, in tables a job page renders. It is appended to the
 file the CLI is given, so a step that already wrote there keeps its text.
 """
 
+import re
+
 from argus.domain.models import AgentMetrics, Finding, ReviewContext, ReviewResult, rank_findings
-from argus.report.markdown import render_counts
+from argus.report.markdown import plural, render_counts
 
 REVIEW_STAGE = "review"
 
@@ -27,9 +29,10 @@ def render_summary(result: ReviewResult, context: ReviewContext) -> str:
 
 def _subject(context: ReviewContext) -> str:
     if context.pr is None:
-        return f"Local diff, {len(context.files)} changed {_plural(len(context.files), 'file')}."
+        return f"Local diff, {len(context.files)} changed {plural(len(context.files), 'file')}."
     pr = context.pr
-    return f"[#{pr.number}: {_cell(pr.title)}]({pr.html_url}) at `{pr.head_sha[:7]}`"
+    # The link text is ours; the title, the author's, stays outside it and escaped.
+    return f"[#{pr.number}]({pr.html_url}) {_cell(pr.title)}, at `{pr.head_sha[:7]}`."
 
 
 def _findings_table(findings: list[Finding]) -> str:
@@ -94,14 +97,18 @@ def _table(headers: list[str], rows: list[str]) -> str:
     return "\n".join([head, rule, *rows])
 
 
+_MARKUP = re.compile(r"([\\`*_{}\[\]()<>#+!|~])")
+"""ASCII punctuation GFM reads as markup; a backslash makes it text again."""
+
+
 def _cell(text: str) -> str:
-    """One table cell: no pipes, no line breaks."""
-    return " ".join(text.split()).replace("|", "\\|")
+    """Author- or model-written text as it appears on the job page: text, never markup.
+
+    Titles and findings come from the pull request and the model, so a title
+    such as `evil](https://...)[` must not close a link or open one.
+    """
+    return _MARKUP.sub(r"\\\1", " ".join(text.split()))
 
 
 def _seconds(ms: int) -> str:
     return f"{ms / 1000:.1f} s"
-
-
-def _plural(count: int, noun: str) -> str:
-    return noun if count == 1 else noun + "s"

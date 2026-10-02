@@ -101,8 +101,24 @@ def test_summary_opens_with_the_pull_request_and_the_counts() -> None:
     text = render_summary(result([finding("security-1", "high", "confirmed")]), context())
 
     assert text.startswith("## Argus review\n")
-    assert "[#7: Add paging \\| and lookups](https://github.com/o/r/pull/7)" in text
+    assert "[#7](https://github.com/o/r/pull/7) Add paging \\| and lookups, at `aaaaaaa`." in text
     assert "1 finding: 1 confirmed." in text
+
+
+def test_a_pull_request_title_cannot_inject_markdown_into_the_summary() -> None:
+    """The title is the author's text; on the job page it must read as text, not markup."""
+    hostile = PR.model_copy(
+        update={"title": "evil](https://attacker.example/phish)[ ![x](https://a/b.png) `code` *em*"}
+    )
+
+    text = render_summary(result([]), context(pr=hostile))
+
+    assert "[#7](https://github.com/o/r/pull/7)" in text
+    assert "](https://attacker.example/phish)" not in text
+    assert (
+        "evil\\]\\(https://attacker.example/phish\\)\\[ \\!\\[x\\]\\(https://a/b.png\\) "
+        "\\`code\\` \\*em\\*"
+    ) in text
 
 
 def test_summary_for_a_local_diff_names_no_pull_request() -> None:
@@ -121,9 +137,11 @@ def test_summary_tabulates_shown_findings_with_a_link_free_location_and_escaped_
 
     text = render_summary(result(findings), context())
 
-    assert "| Severity | Finding | Location | Status |" in text
-    assert "| HIGH | SQL built with \\| f-string | `app/repo.py:12-14` | confirmed |" in text
-    assert "| LOW | t | `app/repo.py:12` | unverified |" in text
+    assert "| Severity | Finding | Location | Status | Category |\n" in text
+    assert (
+        "| HIGH | SQL built with \\| f-string | `app/repo.py:12-14` | confirmed | security |\n"
+    ) in text
+    assert "| LOW | t | `app/repo.py:12` | unverified | quality |\n" in text
     assert "| CRITICAL |" not in text  # rejected findings are not listed
 
 

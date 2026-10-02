@@ -74,9 +74,9 @@ def render_footer(result: ReviewResult) -> str:
     if rejections:
         parts.append(f"{rejections} schema rejection{'s' if rejections != 1 else ''}")
     if held:
-        parts.append(f"{held} {_plural(held, 'answer')} held")
+        parts.append(f"{held} {plural(held, 'answer')} held")
     if recovered:
-        parts.append(f"{_plural(recovered, 'answer')} recovered")
+        parts.append(f"{plural(recovered, 'answer')} recovered")
     parts.append(f"session {result.session_id}")
     if result.config is not None:
         parts.append(f"prompts {result.config.prompts_sha}")
@@ -95,15 +95,15 @@ def render_agents(agents: list[AgentMetrics]) -> str:
 
 def _agent_summary(agent: AgentMetrics) -> str:
     parts = [
-        f"{agent.agent} {agent.turns} {_plural(agent.turns, 'turn')}",
-        f"{agent.tool_calls} {_plural(agent.tool_calls, 'tool call')}",
+        f"{agent.agent} {agent.turns} {plural(agent.turns, 'turn')}",
+        f"{agent.tool_calls} {plural(agent.tool_calls, 'tool call')}",
     ]
     if agent.duration_ms:
         parts.append(f"{agent.duration_ms / 1000:.1f} s")
     return ", ".join(parts)
 
 
-def _plural(count: int, noun: str) -> str:
+def plural(count: int, noun: str) -> str:
     return noun if count == 1 else noun + "s"
 
 

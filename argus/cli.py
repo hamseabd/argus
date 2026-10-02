@@ -211,11 +211,24 @@ def _step_summary_from_env() -> Path | None:
 
 
 def _append_summary(path: Path, text: str) -> None:
-    """Add to the summary file, never replace it: a job's earlier steps may have written there."""
+    """Add to the summary file, never replace it: a job's earlier steps may have written there.
+
+    An earlier step may have left the file without a final newline; Markdown
+    reads a heading only at the start of a line, so one is supplied then.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    unterminated = path.exists() and path.stat().st_size > 0 and not _ends_with_newline(path)
     with path.open("a", encoding="utf-8") as out:
+        if unterminated:
+            out.write("\n")
         out.write(text)
     telemetry.get_logger().info("summary_written", path=str(path))
+
+
+def _ends_with_newline(path: Path) -> bool:
+    with path.open("rb") as existing:
+        existing.seek(-1, os.SEEK_END)
+        return existing.read(1) == b"\n"
 
 
 def _settings_problem(exc: ValidationError) -> str:

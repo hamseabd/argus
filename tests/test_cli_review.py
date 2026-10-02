@@ -289,6 +289,18 @@ def test_summary_is_appended_to_the_given_file(stubbed: dict, tmp_path: Path) ->
     assert "high problem" in text
 
 
+def test_summary_starts_on_its_own_line_after_an_unterminated_earlier_step(
+    stubbed: dict, tmp_path: Path
+) -> None:
+    summary = tmp_path / "summary.md"
+    summary.write_text("earlier step without a newline")
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--summary", str(summary)])
+
+    assert result.exit_code == 0, result.output
+    assert "earlier step without a newline\n## Argus review\n" in summary.read_text()
+
+
 def test_summary_defaults_to_the_actions_step_summary_file(
     stubbed: dict, tmp_path: Path, monkeypatch
 ) -> None:
