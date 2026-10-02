@@ -1,0 +1,2 @@
+# delete_project no longer checks the admin role: any user can delete any project.
+- {file: app/projects.py, line_start: 22, line_end: 23, category: security, severity: critical}
