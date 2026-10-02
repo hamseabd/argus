@@ -34,6 +34,13 @@ def lead_user_prompt(context: ReviewContext) -> str:
             "Read these with the Read tool if they matter to the review:\n\n"
             + "\n".join(f"- {path}" for path in context.truncated_files)
         )
+    if context.ignored_files:
+        parts.append(
+            "## Files excluded from the review\n\n"
+            "These changed too but match an ignore pattern (lockfiles, generated output); "
+            "they are not in the diff and need no reading:\n\n"
+            + "\n".join(f"- {path}" for path in context.ignored_files)
+        )
     parts.append("## Diff\n\n```diff\n" + context.diff_text.rstrip("\n") + "\n```")
     return "\n\n".join(parts) + "\n"
 

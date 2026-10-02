@@ -65,3 +65,30 @@ def test_the_answer_hold_limit_is_env_overridable(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("ARGUS_LEAD_MAX_ANSWER_HOLDS", "5")
 
     assert Settings(_env_file=None).lead_max_answer_holds == 5
+
+
+def test_ignore_paths_default_to_lockfiles_and_minified_bundles() -> None:
+    s = Settings(_env_file=None)
+
+    assert s.ignore_patterns == (
+        "*.lock",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "go.sum",
+        "*.min.js",
+        "*.min.css",
+    )
+
+
+def test_ignore_paths_are_a_comma_separated_list_in_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ARGUS_IGNORE_PATHS", " vendor/ , *.snap,,docs/*.md ")
+
+    assert Settings(_env_file=None).ignore_patterns == ("vendor/", "*.snap", "docs/*.md")
+
+
+def test_an_empty_ignore_paths_turns_the_filter_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ARGUS_IGNORE_PATHS", "")
+
+    assert Settings(_env_file=None).ignore_patterns == ()

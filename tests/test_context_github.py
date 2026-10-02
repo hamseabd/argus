@@ -185,3 +185,31 @@ def test_repo_from_remote_is_none_without_a_github_origin(tmp_path: Path) -> Non
         ["git", "remote", "add", "origin", "https://gitlab.com/x/y.git"], cwd=tmp_path, check=True
     )
     assert repo_from_remote(tmp_path) is None
+
+
+LOCK_DIFF = (
+    "diff --git a/uv.lock b/uv.lock\n--- a/uv.lock\n+++ b/uv.lock\n@@ -1,2 +1,3 @@\n a\n+b\n c\n"
+)
+
+
+@respx.mock
+def test_pr_context_drops_ignored_files_from_the_diff_and_the_file_list(tmp_path: Path) -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7", headers={"Accept": "application/vnd.github.diff"}).mock(
+        return_value=httpx.Response(200, text=DIFF + LOCK_DIFF)
+    )
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(return_value=httpx.Response(200, json=PR_JSON))
+    respx.get(f"{API}/repos/o/r/pulls/7/files").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"filename": "app/cache.py", "status": "modified"},
+                {"filename": "uv.lock", "status": "modified"},
+            ],
+        )
+    )
+
+    ctx = pr_context(client(), "o", "r", 7, tmp_path, ignore=["*.lock"])
+
+    assert ctx.diff_text == DIFF
+    assert ctx.files == [ChangedFile(path="app/cache.py", status="modified")]
+    assert ctx.ignored_files == ["uv.lock"]

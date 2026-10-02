@@ -60,14 +60,18 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Stub the context and pipeline; record what the command passed to them."""
     calls: dict = {}
 
-    def fake_local_context(path: Path, base: str = "main", max_bytes: int = 0) -> ReviewContext:
+    def fake_local_context(
+        path: Path, base: str = "main", max_bytes: int = 0, ignore: tuple[str, ...] = ()
+    ) -> ReviewContext:
         calls["base"] = base
         calls["max_bytes"] = max_bytes
+        calls["ignore"] = ignore
         return ReviewContext(
             source="local",
             repo_root=tmp_path,
             diff_text=calls.get("diff_text", "+x\n"),
             files=calls.get("files", [ChangedFile(path="a.py", status="modified")]),
+            ignored_files=calls.get("ignored_files", []),
         )
 
     async def fake_run_review(context, agent, *, verify=True, verify_concurrency=4, run_id=None):
@@ -202,7 +206,7 @@ def test_malformed_credential_fails_before_any_query(stubbed: dict, monkeypatch)
 def test_git_errors_exit_one(stubbed: dict, monkeypatch) -> None:
     from argus.domain.errors import GitError
 
-    def broken(path, base="main", max_bytes=0):
+    def broken(path, base="main", max_bytes=0, ignore=()):
         raise GitError("git merge-base failed: fatal: Not a valid object name nope")
 
     monkeypatch.setattr(cli, "local_context", broken)
@@ -256,3 +260,34 @@ def test_a_failed_review_still_closes_the_tracing_session(
 
     assert result.exit_code == 1
     assert sessions == ["in", "out"]
+
+
+def test_ignore_options_add_to_the_configured_patterns(stubbed: dict, monkeypatch) -> None:
+    monkeypatch.setenv("ARGUS_IGNORE_PATHS", "*.lock")
+
+    result = runner.invoke(
+        cli.app, ["review", "--diff", "--ignore", "vendor/", "--ignore", "*.snap"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert tuple(stubbed["ignore"]) == ("*.lock", "vendor/", "*.snap")
+
+
+def test_the_default_ignore_patterns_reach_the_context(stubbed: dict) -> None:
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert "*.lock" in stubbed["ignore"]
+
+
+def test_a_diff_that_is_entirely_ignored_says_so(stubbed: dict) -> None:
+    stubbed["diff_text"] = ""
+    stubbed["files"] = []
+    stubbed["ignored_files"] = ["uv.lock"]
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 1
+    assert "nothing to review" in result.output
+    assert "uv.lock" in result.output
+    assert "agent" not in stubbed

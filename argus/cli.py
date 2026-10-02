@@ -60,6 +60,16 @@ def review(
     json_path: Annotated[
         Path | None, typer.Option("--json", help="Write the ReviewResult here.")
     ] = None,
+    ignore: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--ignore",
+            help=(
+                "Leave changed files matching this pattern out of the review; repeatable. "
+                "Adds to ARGUS_IGNORE_PATHS."
+            ),
+        ),
+    ] = None,
     no_verify: Annotated[bool, typer.Option("--no-verify", help="Skip the verify stage.")] = False,
     fail_on: Annotated[
         str | None,
@@ -96,16 +106,19 @@ def review(
     with tracing.session():
         from argus.agent.review import SdkReviewAgent  # keep the SDK import lazy
 
+        patterns = (*settings.ignore_patterns, *(ignore or ()))
         try:
             if github is None:
-                context = local_context(Path.cwd(), base, settings.diff_size_cap)
+                context = local_context(Path.cwd(), base, settings.diff_size_cap, ignore=patterns)
             else:
                 client, owner, name = github
                 root = repo_root(Path.cwd())
-                context = pr_context(client, owner, name, pr, root, settings.diff_size_cap)
+                context = pr_context(
+                    client, owner, name, pr, root, settings.diff_size_cap, ignore=patterns
+                )
                 _warn_on_head_mismatch(context)
             if not context.files and not context.diff_text.strip():
-                _fail("nothing to review: the diff is empty")
+                _fail(_nothing_to_review(context))
             result = asyncio.run(
                 run_review(
                     context,
@@ -124,6 +137,15 @@ def review(
             _post_review(github[0], context, result)
     if fail_on is not None and gate_tripped(result.review.findings, fail_on):
         raise typer.Exit(EXIT_GATE)
+
+
+def _nothing_to_review(context: ReviewContext) -> str:
+    if context.ignored_files:
+        return (
+            "nothing to review: every changed file matches an ignore pattern "
+            f"({', '.join(context.ignored_files)}); pass ARGUS_IGNORE_PATHS= to review them"
+        )
+    return "nothing to review: the diff is empty"
 
 
 def gate_tripped(findings: list[Finding], fail_on: str) -> bool:
