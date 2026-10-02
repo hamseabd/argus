@@ -87,10 +87,14 @@ async def run_eval(
     label: str,
     verify_concurrency: int = DEFAULT_VERIFY_CONCURRENCY,
 ) -> ResultPaths:
-    """Every case in every mode, one at a time; writes <label>.json and <label>.md."""
+    """Every case in every mode, one at a time; writes <label>.json and <label>.md.
+
+    A mode named twice runs once: the corpus costs real quota, and a second
+    pass would double the summary while the record kept only the last pass.
+    """
     record: dict[str, Any] = {"label": label, "modes": {}}
     scores_by_mode: dict[str, list[CaseScore]] = {}
-    for mode in modes:
+    for mode in dict.fromkeys(modes):
         entries = []
         for case in cases:
             score, result = await run_case(
@@ -116,15 +120,24 @@ async def run_eval(
 
 
 def _short_sha() -> str:
-    """HEAD of the Argus checkout under evaluation, marked -dirty with uncommitted changes."""
+    """HEAD of the Argus checkout under evaluation, marked -dirty with uncommitted changes.
+
+    Outside a git checkout (an installed copy, say) the label reads "unknown"
+    rather than failing a run before it has reviewed anything.
+    """
 
     def git(*args: str) -> str:
         return subprocess.run(
             ["git", *args], cwd=ROOT, check=True, capture_output=True, text=True
         ).stdout.strip()
 
-    sha = git("rev-parse", "--short", "HEAD")
-    return f"{sha}-dirty" if git("status", "--porcelain", "--untracked-files=no") else sha
+    try:
+        sha = git("rev-parse", "--short", "HEAD")
+        dirty = bool(git("status", "--porcelain", "--untracked-files=no"))
+    except (subprocess.CalledProcessError, OSError) as exc:
+        telemetry.get_logger().warning("argus_sha_unknown", error=str(exc).splitlines()[0])
+        return "unknown"
+    return f"{sha}-dirty" if dirty else sha
 
 
 app = typer.Typer(add_completion=False)

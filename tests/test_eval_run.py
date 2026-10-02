@@ -15,6 +15,7 @@ from argus.domain.models import Finding, Review, ReviewContext, StageMetrics, Ve
 from argus.pipeline import StageOutcome
 from evals.corpus import Case, load_cases
 from evals.run import ResultPaths, result_label, run_eval
+from tests.helpers import git
 
 CASES = {case.name: case for case in load_cases()}
 BUGS = {bug.file: bug for case in CASES.values() for bug in case.expected}
@@ -164,6 +165,58 @@ def test_a_case_whose_repository_cannot_be_built_is_scored_as_failed_and_the_run
     assert (broken["score"]["false_negatives"], broken["score"]["cost_usd"]) == (1, 0.0)
     assert off_by_one["score"]["error"] is None
     assert off_by_one["score"]["true_positives"] == 1
+
+
+def test_a_repeated_mode_runs_the_corpus_once_and_is_summarised_once(tmp_path: Path) -> None:
+    agent = OracleAgent()
+
+    paths = run(agent, ["sqli"], ["verify", "verify"], tmp_path)
+
+    assert len(agent.roots) == 1
+    record = json.loads(paths.json.read_text())
+    assert list(record["modes"]) == ["verify"]
+    summary = record["modes"]["verify"]["summary"]
+    assert (summary["cases"], summary["true_positives"], summary["total_cost_usd"]) == (1, 1, 0.75)
+    assert len(record["modes"]["verify"]["cases"]) == 1
+
+
+@pytest.fixture
+def argus_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A throwaway repository standing in for the Argus checkout under evaluation."""
+    repo = tmp_path / "argus"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.email", "fixture@argus.test")
+    git(repo, "config", "user.name", "Fixture")
+    (repo / "tracked.txt").write_text("one\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "init")
+    monkeypatch.setattr(evals.run, "ROOT", repo)
+    return repo
+
+
+def test_the_label_sha_is_head_of_the_checkout(argus_checkout: Path) -> None:
+    assert evals.run._short_sha() == git(argus_checkout, "rev-parse", "--short", "HEAD")
+
+
+def test_an_uncommitted_change_marks_the_sha_dirty(argus_checkout: Path) -> None:
+    (argus_checkout / "tracked.txt").write_text("two\n")
+
+    assert evals.run._short_sha().endswith("-dirty")
+
+
+def test_an_untracked_file_alone_does_not_mark_the_sha_dirty(argus_checkout: Path) -> None:
+    (argus_checkout / "scratch.txt").write_text("x\n")
+
+    assert not evals.run._short_sha().endswith("-dirty")
+
+
+def test_without_a_git_checkout_the_sha_reads_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(evals.run, "ROOT", tmp_path)
+
+    assert evals.run._short_sha() == "unknown"
 
 
 class FakeLiveRun:
