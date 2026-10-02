@@ -66,6 +66,13 @@ class FakeGitHub:
     def __init__(self, calls: dict) -> None:
         self.calls = calls
 
+    def pr_reviews(self, owner: str, repo: str, number: int) -> list[dict]:
+        self.calls["fetched_known"] = True
+        return self.calls.get("reviews", [])
+
+    def pr_review_comments(self, owner: str, repo: str, number: int) -> list[dict]:
+        return self.calls.get("comments", [])
+
     def post_review(self, owner: str, repo: str, number: int, payload: dict) -> str:
         self.calls["posted"] = (owner, repo, number, payload)
         if isinstance(self.calls.get("post_outcome"), Exception):
@@ -92,8 +99,11 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
             pr=PR,
         )
 
-    async def fake_run_review(context, agent, *, verify=True, verify_concurrency=4, run_id=None):
+    async def fake_run_review(
+        context, agent, *, verify=True, verify_concurrency=4, run_id=None, known=()
+    ):
         calls["context"] = context
+        calls["known"] = list(known)
         return fake_result()
 
     monkeypatch.setattr(cli, "GitHubClient", fake_client)
@@ -206,3 +216,55 @@ def test_fail_on_applies_in_pr_mode(stubbed: dict) -> None:
         ).exit_code
         == 3
     )
+
+
+def test_pr_mode_hands_the_findings_argus_already_posted_to_the_pipeline(
+    stubbed: dict, monkeypatch
+) -> None:
+    monkeypatch.setenv("ARGUS_REVIEWER_LOGIN", "argus-code-reviewer-agent[bot]")
+    stubbed["reviews"] = [
+        {
+            "id": 1,
+            "body": "<!-- argus:review -->\n\nEarlier.",
+            "user": {"login": "argus-code-reviewer-agent[bot]", "type": "Bot"},
+            "html_url": "https://github.com/o/r/pull/7#r1",
+        }
+    ]
+    stubbed["comments"] = [
+        {
+            "pull_request_review_id": 1,
+            "path": "a.py",
+            "line": 3,
+            "original_line": 3,
+            "body": "**[HIGH] Stale entry** · correctness · confirmed · confidence 0.80",
+            "html_url": "https://github.com/o/r/pull/7#discussion_1",
+            "user": {"login": "argus-code-reviewer-agent[bot]", "type": "Bot"},
+        }
+    ]
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
+
+    assert result.exit_code == 0, result.output
+    assert [(k.file, k.line, k.title) for k in stubbed["known"]] == [("a.py", 3, "Stale entry")]
+
+
+def test_include_known_skips_the_lookup_and_reports_everything(stubbed: dict, monkeypatch) -> None:
+    monkeypatch.setenv("ARGUS_REVIEWER_LOGIN", "argus-code-reviewer-agent[bot]")
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r", "--include-known"])
+
+    assert result.exit_code == 0, result.output
+    assert "fetched_known" not in stubbed
+    assert stubbed["known"] == []
+
+
+def test_without_a_reviewer_identity_no_earlier_review_is_trusted(
+    stubbed: dict, monkeypatch
+) -> None:
+    monkeypatch.delenv("ARGUS_REVIEWER_LOGIN", raising=False)
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
+
+    assert result.exit_code == 0, result.output
+    assert "fetched_known" not in stubbed
+    assert stubbed["known"] == []

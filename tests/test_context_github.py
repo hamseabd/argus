@@ -185,3 +185,24 @@ def test_repo_from_remote_is_none_without_a_github_origin(tmp_path: Path) -> Non
         ["git", "remote", "add", "origin", "https://gitlab.com/x/y.git"], cwd=tmp_path, check=True
     )
     assert repo_from_remote(tmp_path) is None
+
+
+@respx.mock
+def test_pr_reviews_and_review_comments_paginate() -> None:
+    reviews = respx.get(f"{API}/repos/o/r/pulls/7/reviews")
+    reviews.side_effect = [
+        httpx.Response(
+            200,
+            json=[{"id": 1, "body": "a"}],
+            headers={"Link": f'<{API}/repos/o/r/pulls/7/reviews?page=2>; rel="next"'},
+        ),
+        httpx.Response(200, json=[{"id": 2, "body": "b"}]),
+    ]
+    comments = respx.get(f"{API}/repos/o/r/pulls/7/comments").mock(
+        return_value=httpx.Response(200, json=[{"id": 9, "body": "c"}])
+    )
+
+    assert [r["id"] for r in client().pr_reviews("o", "r", 7)] == [1, 2]
+    assert [c["id"] for c in client().pr_review_comments("o", "r", 7)] == [9]
+    assert reviews.call_count == 2
+    assert comments.calls.last.request.url.params["per_page"] == "100"

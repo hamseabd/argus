@@ -65,3 +65,9 @@ def test_the_answer_hold_limit_is_env_overridable(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("ARGUS_LEAD_MAX_ANSWER_HOLDS", "5")
 
     assert Settings(_env_file=None).lead_max_answer_holds == 5
+
+
+def test_reviewer_login_is_unset_by_default_and_env_overridable(monkeypatch) -> None:
+    assert Settings(_env_file=None).reviewer_login == ""
+    monkeypatch.setenv("ARGUS_REVIEWER_LOGIN", "argus-code-reviewer-agent[bot]")
+    assert Settings(_env_file=None).reviewer_login == "argus-code-reviewer-agent[bot]"

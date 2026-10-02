@@ -70,8 +70,11 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             files=calls.get("files", [ChangedFile(path="a.py", status="modified")]),
         )
 
-    async def fake_run_review(context, agent, *, verify=True, verify_concurrency=4, run_id=None):
+    async def fake_run_review(
+        context, agent, *, verify=True, verify_concurrency=4, run_id=None, known=()
+    ):
         calls["run_id"] = run_id
+        calls["known"] = list(known)
         calls["verify"] = verify
         calls["verify_concurrency"] = verify_concurrency
         calls["agent"] = agent
@@ -256,3 +259,17 @@ def test_a_failed_review_still_closes_the_tracing_session(
 
     assert result.exit_code == 1
     assert sessions == ["in", "out"]
+
+
+def test_local_mode_has_no_earlier_reviews_to_consult(stubbed: dict) -> None:
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert stubbed["known"] == []
+
+
+def test_fail_on_still_counts_findings_already_reported(stubbed: dict) -> None:
+    """Reported once before is not fixed; an open critical still fails the gate."""
+    stubbed["outcome"] = fake_result([finding("critical", status="known")])
+
+    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "low"]).exit_code == 3

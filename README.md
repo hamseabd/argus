@@ -24,6 +24,7 @@ The verifier confirmed it, and the fix landed with a test before merge.
 - **Orchestrates specialists.** One `query()` runs a lead reviewer on Opus as the orchestrator: it must delegate to `correctness`, `security`, and `quality` subagents on Sonnet in one turn (fan-out), then merges and de-duplicates what they return (fan-in). The lead does not re-check findings itself; that is the verifier's job.
 - **Verifies before it reports.** Every finding gets its own fresh verifier query whose only job is to refute it by reading the code. Rejected findings are dropped; failed verifications are reported as `unverified`, never as confirmed.
 - **Posts inline.** A finding lands as a review comment on its line when that line is in the diff, otherwise in the review body. The review never requests changes; merge gating is the CLI exit code.
+- **Does not repeat itself.** On a re-review it reads its own earlier reviews on the pull request first. A finding that repeats one already posted, same file and title, or same file within two lines with the same category and severity, is marked `known` before verification: not re-verified, not posted again, counted in the report, and still gated, since reported before is not fixed. `--include-known` turns this off.
 - **Never touches the repository.** Reviewers get `Read`, `Grep`, `Glob`, `Agent`, and one custom read-only tool served by an in-process MCP server. Mutating tools are removed from the tool set and denied again by a `PreToolUse` hook, so the guardrail is layered, not a prompt instruction.
 - **Explains itself.** Structured JSON telemetry carries cost, tokens, turns, duration, subagent count, rejected structured outputs, and held and recovered answers per stage, plus a tool-call audit trail, under one `run_id`. The review stage is attributed per agent: turns, tool calls, tokens, and duration for the lead and each specialist, in the JSON artifact and the report footer. With an OTLP endpoint set, each review is also one OpenTelemetry trace: the run, the review and each verification, and under them every model turn and tool call of the lead and each specialist, with tokens; see [Tracing](#tracing).
 
@@ -97,7 +98,7 @@ The options set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, which overrides every ot
 A hook refuses the lead's answer while any specialist it started is still running, and once more after the last one stops, because the stop fires before the report reaches the lead; holds are capped at three (`ARGUS_LEAD_MAX_ANSWER_HOLDS`) so they cannot last forever, and each release is logged as `answer_hold_released`.
 If the query still ends in plain text or over its budget after the SDK accepted an answer, the runner returns that accepted answer, validated like any other, and logs `structured_output_recovered`; a run that never had an accepted answer fails as before.
 Held and recovered answers are counted in the stage metrics and the report footer.
-3. **Verify.** Each finding runs in its own verifier query with only the finding and its diff hunk. The verifier confirms only if the code path actually exhibits the issue. At most four run at once.
+3. **Verify.** First, in PR mode, findings an earlier Argus review already posted are marked `known` and set aside. An Argus review is one that opens with the `<!-- argus:review -->` marker and was posted by the one login Argus posts as, `ARGUS_REVIEWER_LOGIN`, which the workflow sets from the minted app's slug; the marker alone cannot suppress a finding, nor can another app installed on the repository, and with no login configured no earlier review is trusted at all. Each remaining finding runs in its own verifier query with only the finding and its diff hunk. The verifier confirms only if the code path actually exhibits the issue. At most four run at once.
 4. **Rank.** Rejected findings are dropped. The rest are ordered confirmed before unverified, then by severity, then by path.
 5. **Report.** Markdown in the terminal, a JSON artifact with `--json`, and with `--post` a GitHub review with inline comments.
 
@@ -156,6 +157,7 @@ argus review --diff --json argus-review.json --fail-on high
 | `--post` | Post the review on the pull request. Needs `--pr` and `GITHUB_TOKEN`. |
 | `--json PATH` | Write the full `ReviewResult`, written before posting so a posting failure still leaves the record. |
 | `--no-verify` | Skip the verify stage; every finding is reported as `unverified`. |
+| `--include-known` | Report findings an earlier Argus review already posted on the pull request instead of marking them `known`. |
 | `--fail-on SEVERITY` | Exit 3 if any confirmed or unverified finding is at or above `critical`, `high`, `medium`, or `low`. |
 
 Exit codes: `0` success, `1` error, `2` bad command line, `3` severity gate tripped.

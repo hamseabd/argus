@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     verify_concurrency: int = Field(default=4, ge=1)
 
     diff_size_cap: int = Field(default=DIFF_SIZE_CAP, ge=1)
+    reviewer_login: str = Field(
+        default="",
+        description=(
+            "The GitHub login Argus posts reviews as (the app slug plus [bot]). Only that "
+            "login's earlier reviews are read back as known findings; unset, none are."
+        ),
+    )
     log_format: LogFormat = "auto"
     log_level: LogLevel = "info"
     trace_content: bool = Field(
