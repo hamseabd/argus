@@ -15,12 +15,12 @@ and denial of every tool call.
 """
 
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from claude_agent_sdk import HookContext, HookMatcher
-from claude_agent_sdk.types import HookEvent
+from claude_agent_sdk.types import HookCallback, HookEvent
 
 from argus.agent.tools import GIT_HISTORY_TOOL_NAME
 from argus.settings import DEFAULT_ANSWER_HOLDS
@@ -38,6 +38,8 @@ ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Agent", GIT_HISTORY_T
 READ_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", GIT_HISTORY_TOOL_NAME)
 """The tools that only look at code; the lead's reading budget governs these."""
 READ_TOOL_MATCHER = "|".join(sorted(READ_TOOLS))
+AGENT_TOOL = "Agent"
+"""The tool the lead delegates with; its calls are what the ledger and the trace attribute to."""
 STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
 """The SDK's internal tool that validates the final answer against the output schema.
 
@@ -51,7 +53,9 @@ LEAD_AGENT = "lead"
 
 _INPUT_SUMMARY_CHARS = 200
 
-Hook = Callable[[dict[str, Any], str | None, HookContext], Awaitable[dict[str, Any]]]
+HookData = dict[str, Any]
+"""A hook's input as Argus reads it: a plain mapping; build_hooks casts the SDK's typed unions."""
+Hook = Callable[[HookData, str | None, HookContext], Awaitable[dict[str, Any]]]
 
 
 @dataclass
@@ -95,7 +99,7 @@ class HookState:
     recorder: "TraceRecorder | None" = None
     """Builds the query's spans; attached by the runner for the length of one query."""
 
-    def agent(self, data: dict[str, Any]) -> AgentCounters:
+    def agent(self, data: HookData) -> AgentCounters:
         """The counters for whichever agent a hook input came from."""
         agent_id = data.get("agent_id")
         if agent_id and data.get("agent_type"):
@@ -104,7 +108,7 @@ class HookState:
 
 
 def deny_mutating_tools(state: HookState) -> Hook:
-    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+    async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
         name = data.get("tool_name", "")
         if name not in DENIED_TOOLS:
             return {}
@@ -113,16 +117,8 @@ def deny_mutating_tools(state: HookState) -> Hook:
             f"{name} is not available: Argus is a read-only reviewer "
             "and never changes the repository."
         )
-        if state.recorder is not None:
-            state.recorder.on_tool_denied(data, reason)
         get_logger().warning("tool_denied", tool=name, input=summarize(data.get("tool_input")))
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        }
+        return _deny(state, data, reason)
 
     return hook
 
@@ -142,7 +138,7 @@ def await_specialists(state: HookState) -> Hook:
     recovery of the accepted answer covers what follows.
     """
 
-    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+    async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
         if data.get("agent_id"):
             return {}
         log = get_logger()
@@ -174,15 +170,7 @@ def await_specialists(state: HookState) -> Hook:
             log.warning("answer_held", finished=finished)
         state.finished.clear()
         state.answers_held += 1
-        if state.recorder is not None:
-            state.recorder.on_tool_denied(data, reason)
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        }
+        return _deny(state, data, reason)
 
     return hook
 
@@ -197,7 +185,7 @@ def limit_lead_reading(state: HookState) -> Hook:
     refused: delegation and the final answer always go through.
     """
 
-    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+    async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
         budget = state.read_budget
         if budget is None or data.get("agent_id") or data.get("tool_name") not in READ_TOOLS:
             return {}
@@ -210,21 +198,29 @@ def limit_lead_reading(state: HookState) -> Hook:
             "the change for you: merge what they reported and answer with the Review."
         )
         get_logger().warning("lead_read_denied", tool=data.get("tool_name"), budget=budget)
-        if state.recorder is not None:
-            state.recorder.on_tool_denied(data, reason)
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        }
+        return _deny(state, data, reason)
 
     return hook
 
 
+def _deny(state: HookState, data: HookData, reason: str) -> dict[str, Any]:
+    """The PreToolUse output that refuses a call, with the reason the model will read.
+
+    The refusal is recorded on the trace too, as a span of the call that never ran.
+    """
+    if state.recorder is not None:
+        state.recorder.on_tool_denied(data, reason)
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+
+
 def observe_tool_start(state: HookState) -> Hook:
-    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+    async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
         if state.recorder is not None:
             state.recorder.on_tool_start(data)
         return {}
@@ -233,7 +229,7 @@ def observe_tool_start(state: HookState) -> Hook:
 
 
 def audit_tool_call(state: HookState) -> Hook:
-    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+    async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
         state.tool_calls += 1
         state.agent(data).tool_calls += 1
         if data.get("tool_name") == STRUCTURED_OUTPUT_TOOL and not data.get("agent_id"):
@@ -251,7 +247,7 @@ def audit_tool_call(state: HookState) -> Hook:
 
 
 def audit_tool_failure(state: HookState) -> Hook:
-    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+    async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
         state.tool_failures += 1
         state.agent(data).tool_failures += 1
         if data.get("tool_name") == STRUCTURED_OUTPUT_TOOL:
@@ -267,7 +263,7 @@ def audit_tool_failure(state: HookState) -> Hook:
 
 
 def on_subagent_start(state: HookState) -> Hook:
-    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+    async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
         state.subagents_started += 1
         state.agent(data).started_at = state.clock()
         if data.get("agent_id"):
@@ -281,7 +277,7 @@ def on_subagent_start(state: HookState) -> Hook:
 
 
 def on_subagent_stop(state: HookState) -> Hook:
-    async def hook(data: dict[str, Any], _tool_use_id: str | None, _ctx: HookContext) -> dict:
+    async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
         state.subagents_stopped += 1
         if data.get("agent_id"):
             state.running.pop(str(data["agent_id"]), None)
@@ -306,16 +302,26 @@ def on_subagent_stop(state: HookState) -> Hook:
 def build_hooks(state: HookState) -> dict[HookEvent, list[HookMatcher]]:
     return {
         "PreToolUse": [
-            HookMatcher(matcher=DENIED_TOOL_MATCHER, hooks=[deny_mutating_tools(state)]),
-            HookMatcher(matcher=READ_TOOL_MATCHER, hooks=[limit_lead_reading(state)]),
-            HookMatcher(matcher=STRUCTURED_OUTPUT_TOOL, hooks=[await_specialists(state)]),
-            HookMatcher(hooks=[observe_tool_start(state)]),
+            _matcher([deny_mutating_tools(state)], DENIED_TOOL_MATCHER),
+            _matcher([limit_lead_reading(state)], READ_TOOL_MATCHER),
+            _matcher([await_specialists(state)], STRUCTURED_OUTPUT_TOOL),
+            _matcher([observe_tool_start(state)]),
         ],
-        "PostToolUse": [HookMatcher(hooks=[audit_tool_call(state)])],
-        "PostToolUseFailure": [HookMatcher(hooks=[audit_tool_failure(state)])],
-        "SubagentStart": [HookMatcher(hooks=[on_subagent_start(state)])],
-        "SubagentStop": [HookMatcher(hooks=[on_subagent_stop(state)])],
+        "PostToolUse": [_matcher([audit_tool_call(state)])],
+        "PostToolUseFailure": [_matcher([audit_tool_failure(state)])],
+        "SubagentStart": [_matcher([on_subagent_start(state)])],
+        "SubagentStop": [_matcher([on_subagent_stop(state)])],
     }
+
+
+def _matcher(hooks: Sequence[Hook], matcher: str | None = None) -> HookMatcher:
+    """A HookMatcher over Argus hooks.
+
+    The SDK types a hook's input as a union of per-event TypedDicts and its
+    output as a union of result shapes. Argus hooks read the few keys they need
+    from a plain mapping and return a plain dict, so the one cast lives here.
+    """
+    return HookMatcher(matcher=matcher, hooks=[cast(HookCallback, hook) for hook in hooks])
 
 
 def _truncate(text: str) -> str:

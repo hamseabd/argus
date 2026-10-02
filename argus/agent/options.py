@@ -7,6 +7,8 @@ session isolation that keeps the repository under review from injecting
 its own settings, hooks, or CLAUDE.md into the reviewer.
 """
 
+from typing import Any
+
 from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions
 
 from argus.agent.hooks import ALLOWED_TOOLS, DENIED_TOOLS, HookState, build_hooks
@@ -80,7 +82,7 @@ def verifier_options(
     )
 
 
-def _common(context: ReviewContext, state: HookState) -> dict:
+def _common(context: ReviewContext, state: HookState) -> dict[str, Any]:
     return {
         "cwd": context.repo_root,
         "permission_mode": "dontAsk",
