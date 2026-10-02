@@ -6,9 +6,10 @@ prompts: what the lead is asked to review, and what the verifier is asked
 to check.
 """
 
+import hashlib
 from importlib import resources
 
-from argus.domain.models import ChangedFile, Finding, ReviewContext
+from argus.domain.models import FINGERPRINT_CHARS, ChangedFile, Finding, ReviewContext
 
 PROMPT_NAMES: tuple[str, ...] = ("lead", "correctness", "security", "quality", "verifier")
 
@@ -17,6 +18,20 @@ def load_prompt(name: str) -> str:
     if name not in PROMPT_NAMES:
         raise ValueError(f"unknown prompt {name!r}; expected one of {PROMPT_NAMES}")
     return resources.files(__package__).joinpath(f"{name}.md").read_text(encoding="utf-8")
+
+
+def prompts_digest() -> str:
+    """A short digest of every system prompt, so a run records which prompts it ran on.
+
+    Names and contents go in, in PROMPT_NAMES order, so editing, renaming, or
+    reordering a prompt changes the value.
+    """
+    digest = hashlib.sha256()
+    for name in PROMPT_NAMES:
+        digest.update(f"{name}\n".encode())
+        digest.update(load_prompt(name).encode())
+        digest.update(b"\n")
+    return digest.hexdigest()[:FINGERPRINT_CHARS]
 
 
 def lead_user_prompt(context: ReviewContext) -> str:

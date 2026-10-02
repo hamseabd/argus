@@ -1,5 +1,13 @@
-from argus.domain.models import AgentMetrics, Finding, Review, ReviewResult, StageMetrics, Verdict
-from argus.report.markdown import render_report
+from argus.domain.models import (
+    AgentMetrics,
+    Finding,
+    Review,
+    ReviewResult,
+    RunConfig,
+    StageMetrics,
+    Verdict,
+)
+from argus.report.markdown import plural, render_report
 
 
 def result(findings: list[Finding], verdicts: list[Verdict] | None = None) -> ReviewResult:
@@ -186,3 +194,41 @@ def test_report_counts_do_not_mention_absent_categories() -> None:
 
     assert "1 finding: 1 confirmed." in text
     assert "rejected" not in text
+
+
+def test_footer_names_the_prompts_and_config_digests_when_the_result_carries_them() -> None:
+    plain = result([])
+    config = RunConfig(
+        argus_version="0.1.0",
+        prompts_sha="0123456789ab",
+        lead_model="claude-opus-5",
+        lead_effort="high",
+        lead_max_turns=40,
+        lead_read_budget=10,
+        lead_max_budget_usd=3.0,
+        lead_max_answer_holds=3,
+        specialist_model="claude-sonnet-5",
+        specialist_effort="medium",
+        specialist_max_turns=25,
+        verifier_model="claude-sonnet-5",
+        verifier_effort="medium",
+        verifier_max_turns=10,
+        verifier_max_budget_usd=0.5,
+        verify_concurrency=4,
+        diff_size_cap=204800,
+    )
+    described = plain.model_copy(update={"config": config})
+
+    assert "prompts" not in render_report(plain)
+    assert (
+        f"· session sess-1 · prompts 0123456789ab · config {config.fingerprint}"
+        in render_report(described)
+    )
+
+
+def test_plural_is_shared_by_the_report_and_the_summary() -> None:
+    from argus.report import summary
+
+    assert plural(1, "turn") == "turn"
+    assert plural(2, "turn") == "turns"
+    assert summary.plural is plural

@@ -9,7 +9,14 @@ from opentelemetry.trace import StatusCode
 
 from argus import telemetry
 from argus.domain.errors import AgentRunError, ReviewProtocolError
-from argus.domain.models import Finding, Review, ReviewContext, StageMetrics, Verdict
+from argus.domain.models import (
+    Finding,
+    Review,
+    ReviewContext,
+    RunConfig,
+    StageMetrics,
+    Verdict,
+)
 from argus.pipeline import StageOutcome, run_review
 
 
@@ -289,3 +296,65 @@ def test_a_failed_review_stage_marks_the_run_and_the_stage(tmp_path: Path, spans
     assert rev.status.status_code == StatusCode.ERROR
     assert rev.attributes["langsmith.metadata.cost_usd"] == 3.0
     assert run.status.status_code == StatusCode.ERROR
+
+
+def run_config() -> RunConfig:
+    return RunConfig(
+        argus_version="0.1.0",
+        prompts_sha="0123456789ab",
+        lead_model="claude-opus-5",
+        lead_effort="high",
+        lead_max_turns=40,
+        lead_read_budget=10,
+        lead_max_budget_usd=3.0,
+        lead_max_answer_holds=3,
+        specialist_model="claude-sonnet-5",
+        specialist_effort="medium",
+        specialist_max_turns=25,
+        verifier_model="claude-sonnet-5",
+        verifier_effort="medium",
+        verifier_max_turns=10,
+        verifier_max_budget_usd=0.5,
+        verify_concurrency=4,
+        diff_size_cap=204800,
+    )
+
+
+def test_the_run_config_travels_with_the_result_the_log_and_the_trace(
+    tmp_path: Path, spans
+) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    agent = FakeAgent(review, {"correctness-1": "confirmed"})
+    config = run_config()
+
+    result = asyncio.run(run_review(context(tmp_path), agent, config=config))
+
+    assert result.config == config
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    start = next(e for e in events if e["event"] == "run_start")
+    assert start["config"] == config.fingerprint
+    assert start["prompts"] == config.prompts_sha
+    (run,) = by_name(spans.get_finished_spans(), "argus.run")
+    assert run.attributes["langsmith.metadata.config"] == config.fingerprint
+    assert run.attributes["langsmith.metadata.prompts_sha"] == config.prompts_sha
+    assert run.attributes["langsmith.metadata.lead_model"] == "claude-opus-5"
+
+
+def test_without_a_config_the_result_log_and_trace_carry_none(tmp_path: Path, spans) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    review = Review(summary="s", files_reviewed=[], findings=[])
+
+    result = asyncio.run(run_review(context(tmp_path), FakeAgent(review, {})))
+
+    assert result.config is None
+    start = next(
+        json.loads(line)
+        for line in stream.getvalue().splitlines()
+        if json.loads(line)["event"] == "run_start"
+    )
+    assert "config" not in start
+    (run,) = by_name(spans.get_finished_spans(), "argus.run")
+    assert "langsmith.metadata.config" not in run.attributes

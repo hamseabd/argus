@@ -11,7 +11,9 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from argus import __version__
 from argus.context.diff import DIFF_SIZE_CAP
+from argus.domain.models import RunConfig
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 LogFormat = Literal["auto", "json", "console"]
@@ -56,3 +58,29 @@ class Settings(BaseSettings):
         default=False,
         description="Put prompts, structured output, and model text on trace spans.",
     )
+
+    def run_config(self, prompts_sha: str) -> RunConfig:
+        """Everything here that shapes a query, plus the prompts, as the record of one run.
+
+        Logging and tracing settings are left out: they change what is reported,
+        not what the models are asked.
+        """
+        return RunConfig(
+            argus_version=__version__,
+            prompts_sha=prompts_sha,
+            lead_model=self.lead_model,
+            lead_effort=self.lead_effort,
+            lead_max_turns=self.lead_max_turns,
+            lead_read_budget=self.lead_read_budget,
+            lead_max_budget_usd=self.lead_max_budget_usd,
+            lead_max_answer_holds=self.lead_max_answer_holds,
+            specialist_model=self.specialist_model,
+            specialist_effort=self.specialist_effort,
+            specialist_max_turns=self.specialist_max_turns,
+            verifier_model=self.verifier_model,
+            verifier_effort=self.verifier_effort,
+            verifier_max_turns=self.verifier_max_turns,
+            verifier_max_budget_usd=self.verifier_max_budget_usd,
+            verify_concurrency=self.verify_concurrency,
+            diff_size_cap=self.diff_size_cap,
+        )

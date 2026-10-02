@@ -70,8 +70,11 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             files=calls.get("files", [ChangedFile(path="a.py", status="modified")]),
         )
 
-    async def fake_run_review(context, agent, *, verify=True, verify_concurrency=4, run_id=None):
+    async def fake_run_review(
+        context, agent, *, verify=True, verify_concurrency=4, run_id=None, config=None
+    ):
         calls["run_id"] = run_id
+        calls["config"] = config
         calls["verify"] = verify
         calls["verify_concurrency"] = verify_concurrency
         calls["agent"] = agent
@@ -256,3 +259,98 @@ def test_a_failed_review_still_closes_the_tracing_session(
 
     assert result.exit_code == 1
     assert sessions == ["in", "out"]
+
+
+def test_the_run_config_is_built_from_the_settings_and_handed_to_the_pipeline(
+    stubbed: dict, monkeypatch
+) -> None:
+    monkeypatch.setenv("ARGUS_LEAD_EFFORT", "low")
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    config = stubbed["config"]
+    assert config.lead_effort == "low"
+    assert len(config.prompts_sha) == 12
+
+
+def test_summary_is_appended_to_the_given_file(stubbed: dict, tmp_path: Path) -> None:
+    stubbed["outcome"] = fake_result([finding("high")])
+    summary = tmp_path / "step" / "summary.md"
+    summary.parent.mkdir()
+    summary.write_text("# earlier step\n")
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--summary", str(summary)])
+
+    assert result.exit_code == 0, result.output
+    text = summary.read_text()
+    assert text.startswith("# earlier step\n")
+    assert "## Argus review" in text
+    assert "high problem" in text
+
+
+def test_summary_starts_on_its_own_line_after_an_unterminated_earlier_step(
+    stubbed: dict, tmp_path: Path
+) -> None:
+    summary = tmp_path / "summary.md"
+    summary.write_text("earlier step without a newline")
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--summary", str(summary)])
+
+    assert result.exit_code == 0, result.output
+    assert "earlier step without a newline\n## Argus review\n" in summary.read_text()
+
+
+def test_summary_defaults_to_the_actions_step_summary_file(
+    stubbed: dict, tmp_path: Path, monkeypatch
+) -> None:
+    """In Actions the job page gets the summary without a flag, so the workflow needs none.
+
+    That matters for the dogfood run, which takes its workflow file from the
+    pull request but installs Argus from main.
+    """
+    summary = tmp_path / "step_summary"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert "## Argus review" in summary.read_text()
+
+
+def test_an_explicit_summary_path_wins_over_the_environment(
+    stubbed: dict, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "env"))
+    chosen = tmp_path / "chosen.md"
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--summary", str(chosen)])
+
+    assert result.exit_code == 0, result.output
+    assert "## Argus review" in chosen.read_text()
+    assert not (tmp_path / "env").exists()
+
+
+def test_no_summary_is_written_outside_actions_without_the_flag(
+    stubbed: dict, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_summary_is_written_even_when_the_severity_gate_trips(
+    stubbed: dict, tmp_path: Path
+) -> None:
+    stubbed["outcome"] = fake_result([finding("high")])
+    summary = tmp_path / "summary.md"
+
+    result = runner.invoke(
+        cli.app, ["review", "--diff", "--summary", str(summary), "--fail-on", "high"]
+    )
+
+    assert result.exit_code == cli.EXIT_GATE
+    assert "## Argus review" in summary.read_text()
