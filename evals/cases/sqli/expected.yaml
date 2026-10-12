@@ -1,0 +1,2 @@
+# search_by_name interpolates user input into the SQL text.
+- {file: app/customers.py, line_start: 14, line_end: 15, category: security, severity: high}

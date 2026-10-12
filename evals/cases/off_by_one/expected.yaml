@@ -1,0 +1,2 @@
+# range(0, len - 1, size) drops the final item whenever len(items) - 1 is a multiple of size.
+- {file: app/batching.py, line_start: 10, line_end: 11, category: correctness, severity: medium}

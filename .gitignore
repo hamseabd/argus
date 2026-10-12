@@ -17,6 +17,7 @@ htmlcov/
 
 # Argus output
 argus-review.json
+evals/results/
 
 # OS and editors
 .DS_Store

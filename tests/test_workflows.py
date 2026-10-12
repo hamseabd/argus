@@ -191,3 +191,36 @@ def test_dependabot_batches_minor_and_patch_into_one_pull_request_per_ecosystem(
 
         assert group["patterns"] == ["*"], update["package-ecosystem"]
         assert set(group["update-types"]) == {"minor", "patch"}, update["package-ecosystem"]
+
+
+def test_the_eval_runs_only_on_demand() -> None:
+    """A full corpus run spends real quota, so nothing triggers it but a person."""
+    assert list(load("eval.yml")["on"]) == ["workflow_dispatch"]
+
+
+def test_the_eval_token_is_read_only_and_the_job_has_a_timeout() -> None:
+    eval_workflow = load("eval.yml")
+
+    assert eval_workflow["permissions"] == {"contents": "read"}
+    assert 0 < eval_workflow["jobs"]["eval"]["timeout-minutes"] <= 240
+
+
+def test_the_eval_uses_only_the_subscription_token_and_keeps_its_record() -> None:
+    all_steps = steps("eval.yml", "eval")
+    run = next(s for s in all_steps if s.get("name") == "Evaluate")
+    upload = next(s for s in all_steps if "upload-artifact@" in s.get("uses", ""))
+
+    assert set(run["env"]) == {"CLAUDE_CODE_OAUTH_TOKEN", "ARGUS_LOG_FORMAT", "EVAL_MODE"}
+    assert run["env"]["EVAL_MODE"] == "${{ inputs.mode }}"  # never interpolated into the script
+    assert run["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
+    assert "python -m evals.run" in run["run"]
+    assert upload["if"] == "always()"
+    assert upload["with"]["path"] == "evals/results/"
+
+
+def test_the_eval_workflow_pins_every_action_by_commit() -> None:
+    for step in steps("eval.yml", "eval"):
+        uses = step.get("uses")
+        if uses:
+            sha = uses.split("@", 1)[1]
+            assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha), uses
