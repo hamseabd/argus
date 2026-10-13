@@ -318,6 +318,8 @@ def _settings_problem(exc: ValidationError) -> str:
 
 
 def _fail(message: str) -> NoReturn:
+    # Error text can quote a model's output or a server's reply; it goes to the job log.
+    message = tracing.redact(message)
     telemetry.get_logger().error("run_failed", error=message)
     typer.echo(f"argus: {message}", err=True)
     raise typer.Exit(EXIT_ERROR)

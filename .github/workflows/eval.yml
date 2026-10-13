@@ -46,6 +46,11 @@ jobs:
     # at a time.
     timeout-minutes: 360
     steps:
+      - name: Refuse a run the timeout cannot hold
+        if: inputs.mode == 'both' && inputs.trials == '3'
+        run: |
+          echo "::error::Three trials of both modes outlast the six-hour cap; run one mode at a time."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:

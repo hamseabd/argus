@@ -429,3 +429,12 @@ def test_the_table_shows_how_often_the_verifier_was_inconclusive() -> None:
 
     assert "(2 inconclusive)" in render_markdown({"verify": [unsure]})
     assert "inconclusive" not in render_markdown({"verify": [score_case(bug_case(SQLI), result())]})
+
+
+def test_a_case_that_errored_on_some_trials_sums_the_rest_and_counts_the_errors() -> None:
+    ok = score_case(bug_case(SQLI), result(finding("a")))
+    broken = failed_case(bug_case(SQLI), "boom", 0.1).model_copy(update={"trial": 2})
+
+    table = render_markdown({"verify": [ok, broken]})
+
+    assert "| sqli | 1 / 0 / 1 (1 errored) |" in table

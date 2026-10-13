@@ -154,7 +154,8 @@ def plural(count: int, noun: str) -> str:
 
 
 def _meta(finding: Finding) -> str:
-    return f"{finding.category} · {finding.status} · confidence {finding.confidence:.2f}"
+    meta = f"{finding.category} · {finding.status} · confidence {finding.confidence:.2f}"
+    return meta + (f" · found by {finding.reported_by}" if finding.reported_by else "")
 
 
 def _details(finding: Finding, verdict: Verdict | None = None) -> list[str]:
