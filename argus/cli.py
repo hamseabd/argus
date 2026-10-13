@@ -189,11 +189,7 @@ def review(
                     ignore=patterns,
                 )
                 _warn_on_head_mismatch(context)
-                rules = (
-                    rules_from_github(target.client, target.owner, target.repo, context.pr.base_ref)
-                    if context.pr
-                    else None
-                )
+                rules = rules_from_github(target.client, target.owner, target.repo)
                 if not include_known:
                     reviews = _earlier_reviews(target, settings.reviewer_login)
                     known = _known_findings(target, settings.reviewer_login, reviews)
@@ -226,12 +222,14 @@ def review(
         if summary_path is not None:
             _append_summary(summary_path, render_summary(result, context))
         typer.echo(render_report(result), nl=False)
+        # The check run goes first: a required check must be posted on every
+        # head, even when posting the review then fails.
+        if check and target is not None:
+            _post_check_run(target.client, context, result, fail_on)
         if post and target is not None:
             url = _post_review(target.client, context, result)
             if summary_path is not None:
                 _append_summary(summary_path, f"Posted: {url}\n")
-        if check and target is not None:
-            _post_check_run(target.client, context, result, fail_on)
     # With --check the check run's conclusion is the gate; failing the job as well
     # would make a gated merge read the same as Argus crashing.
     if not check and fail_on is not None and gate_tripped(result.review.findings, fail_on):
@@ -258,7 +256,7 @@ def feedback(
         typer.Option("--since", help="Only findings posted on or after this date (YYYY-MM-DD)."),
     ] = None,
     json_path: Annotated[
-        Path | None, typer.Option("--json", help="Write every rated finding here.")
+        Path | None, typer.Option("--json", help="Write every posted finding here, rated or not.")
     ] = None,
 ) -> None:
     """Read the reactions on Argus's posted findings: precision as the readers judged it.

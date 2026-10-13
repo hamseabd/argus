@@ -32,6 +32,7 @@ from argus.domain.models import (
     rank_findings,
 )
 from argus.report.markdown import (
+    code_block,
     finding_body,
     render_counts,
     render_finding,
@@ -106,17 +107,17 @@ def known_findings_from(
     known: list[KnownFinding] = []
     for review in argus_reviews:
         for comment in by_review[review.get("id")]:
-            match = _INLINE_TITLE.match(str(comment.get("body") or ""))
-            if match is None:
+            header = inline_header(str(comment.get("body") or ""))
+            if header is None:
                 continue
             line = comment.get("line") or comment.get("original_line")
             known.append(
                 KnownFinding(
                     file=str(comment.get("path") or ""),
                     line=int(line) if line else None,
-                    title=match["title"],
-                    severity=_severity(match["severity"]),
-                    category=_category(match["category"]),
+                    title=header["title"],
+                    severity=_severity(header["severity"]),
+                    category=_category(header["category"]),
                     url=str(comment.get("html_url") or ""),
                 )
             )
@@ -221,7 +222,13 @@ def _comment(finding: Finding, lines: frozenset[int], verdict: Verdict | None) -
     # A suggestion replaces exactly the lines the comment spans, so it is offered
     # only when the comment covers the finding's whole range.
     covered = (comment.get("start_line", comment["line"]), comment["line"])
-    if finding.replacement is not None and covered == (finding.line, end or finding.line):
+    # Only a confirmed finding: applying is one click, and the replacement was
+    # written by a model that read an untrusted diff.
+    if (
+        finding.replacement is not None
+        and finding.status == "confirmed"
+        and covered == (finding.line, end or finding.line)
+    ):
         body += "\n\n" + _suggestion(finding.replacement)
     comment["body"] = body
     return comment
@@ -229,10 +236,7 @@ def _comment(finding: Finding, lines: frozenset[int], verdict: Verdict | None) -
 
 def _suggestion(replacement: str) -> str:
     """A GitHub suggestion block, fenced longer than any backtick run in the replacement."""
-    longest = max((len(run) for run in re.findall(r"`+", replacement)), default=0)
-    fence = "`" * max(3, longest + 1)
-    text = replacement.rstrip("\n")
-    return f"{fence}suggestion\n{text}\n{fence}" if text else f"{fence}suggestion\n{fence}"
+    return code_block(replacement, "suggestion")
 
 
 def _body(

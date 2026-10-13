@@ -44,26 +44,54 @@ def test_no_rules_file_on_the_base_means_no_rules(tmp_path: Path) -> None:
 
 
 @respx.mock
-def test_pull_request_rules_are_fetched_at_the_base_ref() -> None:
+def test_pull_request_rules_come_from_the_default_branch_not_the_prs_base() -> None:
+    # The PR's author picks its base, from any branch they can push to; the
+    # default branch is the one the maintainers keep.
+    respx.get(f"{API}/repos/o/r").mock(
+        return_value=httpx.Response(200, json={"default_branch": "trunk"})
+    )
     route = respx.get(f"{API}/repos/o/r/contents/REVIEW.md").mock(
         return_value=httpx.Response(200, text="Prefer explicit errors.\n")
     )
 
-    text = rules_from_github(GitHubClient("t"), "o", "r", "main")
+    text = rules_from_github(GitHubClient("t"), "o", "r")
 
     assert text == "Prefer explicit errors.\n"
     request = route.calls.last.request
-    assert request.url.params["ref"] == "main"
+    assert request.url.params["ref"] == "trunk"
     assert request.headers["Accept"] == "application/vnd.github.raw+json"
 
 
 @respx.mock
 def test_a_missing_rules_file_on_github_means_no_rules() -> None:
+    respx.get(f"{API}/repos/o/r").mock(
+        return_value=httpx.Response(200, json={"default_branch": "main"})
+    )
     respx.get(f"{API}/repos/o/r/contents/REVIEW.md").mock(
         return_value=httpx.Response(404, json={"message": "Not Found"})
     )
 
-    assert rules_from_github(GitHubClient("t"), "o", "r", "main") is None
+    assert rules_from_github(GitHubClient("t"), "o", "r") is None
+
+
+@respx.mock
+def test_any_failure_reading_the_rules_means_no_rules_not_a_failed_review() -> None:
+    # The rules are an optional brief; a 403 or a 500 must not stop the review.
+    respx.get(f"{API}/repos/o/r").mock(
+        return_value=httpx.Response(200, json={"default_branch": "main"})
+    )
+    respx.get(f"{API}/repos/o/r/contents/REVIEW.md").mock(
+        return_value=httpx.Response(500, text="boom")
+    )
+
+    assert rules_from_github(GitHubClient("t"), "o", "r") is None
+
+
+@respx.mock
+def test_an_unreadable_repository_means_no_rules() -> None:
+    respx.get(f"{API}/repos/o/r").mock(return_value=httpx.Response(403, text="nope"))
+
+    assert rules_from_github(GitHubClient("t"), "o", "r") is None
 
 
 def test_long_rules_are_cut_and_say_so(tmp_path: Path) -> None:
