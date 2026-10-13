@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from argus.context.git import head_sha, local_context, local_diff, repo_root
+from argus.context.git import head_sha, increment_since, local_context, local_diff, repo_root
 from argus.domain.errors import GitError
 from argus.domain.models import ChangedFile
 
@@ -191,3 +191,77 @@ def test_an_ignored_file_does_not_count_against_the_size_cap(repo: Path) -> None
 
     assert capped.truncated_files == []
     assert capped.ignored_files == ["uv.lock"]
+
+
+@pytest.fixture
+def pushed(tmp_path: Path) -> tuple[Path, str, str]:
+    """A branch reviewed at one commit, then pushed to again: (repo, reviewed sha, new head)."""
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "config", "user.email", "argus@test")
+    git(tmp_path, "config", "user.name", "argus")
+    (tmp_path / "a.py").write_text("one\n")
+    (tmp_path / "b.py").write_text("two\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "base")
+    git(tmp_path, "checkout", "-q", "-b", "feature")
+    (tmp_path / "a.py").write_text("one, reviewed\n")
+    git(tmp_path, "commit", "-qam", "first push")
+    reviewed = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "b.py").write_text("two, after the review\n")
+    (tmp_path / "poetry.lock").write_text("pinned\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "second push")
+    return tmp_path, reviewed, git(tmp_path, "rev-parse", "HEAD")
+
+
+def test_the_increment_is_only_what_changed_since_the_reviewed_commit(pushed) -> None:
+    repo, reviewed, head = pushed
+
+    increment = increment_since(repo, reviewed, head, ignore=("*.lock",))
+
+    assert increment is not None
+    assert increment.since_sha == reviewed
+    assert [f.path for f in increment.files] == ["b.py"]
+    assert "after the review" in increment.diff_text
+    assert "a.py" not in increment.diff_text
+
+
+def test_after_a_force_push_there_is_no_increment(pushed) -> None:
+    repo, _, head = pushed
+    git(repo, "checkout", "-q", "-b", "rewritten", "main")
+    (repo / "c.py").write_text("elsewhere\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "unrelated")
+    unrelated = git(repo, "rev-parse", "HEAD")
+
+    assert increment_since(repo, unrelated, head) is None
+
+
+def test_an_unknown_reviewed_commit_has_no_increment(pushed) -> None:
+    repo, _, head = pushed
+
+    assert increment_since(repo, "f" * 40, head) is None
+
+
+def test_the_increment_respects_the_size_cap(pushed) -> None:
+    repo, reviewed, head = pushed
+
+    increment = increment_since(repo, reviewed, head, max_bytes=10)
+
+    assert increment is not None
+    assert increment.truncated_files
+
+
+def test_a_merge_since_the_review_means_no_increment(pushed) -> None:
+    # Merging the base into the branch brings in code the pull request did not
+    # write; diffing from the reviewed commit would review all of it.
+    repo, reviewed, _ = pushed
+    git(repo, "checkout", "-q", "main")
+    (repo / "upstream.py").write_text("landed on main\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "elsewhere on main")
+    git(repo, "checkout", "-q", "feature")
+    git(repo, "merge", "-q", "--no-edit", "main")
+    head = git(repo, "rev-parse", "HEAD")
+
+    assert increment_since(repo, reviewed, head) is None

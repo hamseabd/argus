@@ -9,6 +9,7 @@ from argus.domain.errors import GitHubError
 from argus.domain.models import (
     ChangedFile,
     Finding,
+    Increment,
     PRInfo,
     Review,
     ReviewContext,
@@ -268,6 +269,8 @@ def test_pr_mode_hands_the_findings_argus_already_posted_to_the_pipeline(
 
 
 def test_include_known_skips_the_lookup_and_reports_everything(stubbed: dict, monkeypatch) -> None:
+    # Reporting what was already posted only makes sense over the whole pull
+    # request, so it also turns the incremental review off.
     monkeypatch.setenv("ARGUS_REVIEWER_LOGIN", "argus-code-reviewer-agent[bot]")
 
     result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r", "--include-known"])
@@ -314,3 +317,148 @@ def test_summary_survives_a_posting_failure_without_a_url(stubbed: dict, tmp_pat
     text = summary.read_text()
     assert "## Argus review" in text
     assert "Posted:" not in text
+
+
+LOGIN = "argus-code-reviewer-agent[bot]"
+
+
+def earlier_review(commit: str) -> dict:
+    return {
+        "id": 1,
+        "commit_id": commit,
+        "body": "<!-- argus:review -->\n\nEarlier.",
+        "user": {"login": LOGIN, "type": "Bot"},
+        "html_url": "https://github.com/o/r/pull/7#r1",
+    }
+
+
+@pytest.fixture
+def increments(monkeypatch: pytest.MonkeyPatch, stubbed: dict) -> list:
+    asked: list = []
+
+    def fake_increment(repo, since, head, max_bytes=0, ignore=()):
+        asked.append((since, head))
+        if stubbed.get("increment") == "none":
+            return None
+        return Increment(
+            since_sha=since,
+            diff_text="diff --git a/b.py b/b.py\n+x\n",
+            files=[ChangedFile(path="b.py", status="modified")],
+        )
+
+    monkeypatch.setattr(cli, "increment_since", fake_increment)
+    monkeypatch.setenv("ARGUS_REVIEWER_LOGIN", LOGIN)
+    return asked
+
+
+def test_a_pull_request_reviewed_before_is_reviewed_from_where_argus_left_off(
+    stubbed: dict, increments: list
+) -> None:
+    stubbed["reviews"] = [earlier_review("b" * 40)]
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
+
+    assert result.exit_code == 0, result.output
+    assert increments == [("b" * 40, "a" * 40)]
+    assert stubbed["context"].increment.since_sha == "b" * 40
+
+
+def test_a_head_already_reviewed_is_not_reviewed_again(stubbed: dict, increments: list) -> None:
+    stubbed["reviews"] = [earlier_review("a" * 40)]  # the PR head
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r", "--post"])
+
+    assert result.exit_code == 0, result.output
+    assert "already reviewed" in result.output
+    assert "context" not in stubbed and "posted" not in stubbed
+    assert increments == []
+
+
+def test_when_the_reviewed_commit_is_gone_the_whole_pull_request_is_reviewed(
+    stubbed: dict, increments: list
+) -> None:
+    stubbed["reviews"] = [earlier_review("b" * 40)]
+    stubbed["increment"] = "none"  # force-pushed away
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
+
+    assert result.exit_code == 0, result.output
+    assert stubbed["context"].increment is None
+
+
+def test_full_reviews_the_whole_pull_request_but_still_skips_known_findings(
+    stubbed: dict, increments: list
+) -> None:
+    stubbed["reviews"] = [earlier_review("b" * 40)]
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r", "--full"])
+
+    assert result.exit_code == 0, result.output
+    assert increments == []
+    assert stubbed["context"].increment is None
+    assert stubbed["fetched_known"] is True
+
+
+def test_with_a_gate_the_whole_pull_request_is_reviewed_again(
+    stubbed: dict, increments: list
+) -> None:
+    # An increment would never re-find a critical from an earlier push, so a
+    # gated run must see everything: reported before is not fixed.
+    stubbed["reviews"] = [earlier_review("b" * 40)]
+
+    result = runner.invoke(
+        cli.app, ["review", "--pr", "7", "--repo", "o/r", "--fail-on", "critical"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert increments == []
+    assert stubbed["context"].increment is None
+
+
+def test_with_a_gate_an_already_reviewed_head_is_still_reviewed(
+    stubbed: dict, increments: list
+) -> None:
+    stubbed["reviews"] = [earlier_review("a" * 40)]  # the PR head
+
+    result = runner.invoke(
+        cli.app, ["review", "--pr", "7", "--repo", "o/r", "--fail-on", "critical"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "already reviewed" not in result.output
+    assert "context" in stubbed
+
+
+def test_a_push_that_changed_only_ignored_files_is_not_reviewed(
+    stubbed: dict, increments: list, monkeypatch
+) -> None:
+    stubbed["reviews"] = [earlier_review("b" * 40)]
+    monkeypatch.setattr(
+        cli,
+        "increment_since",
+        lambda repo, since, head, max_bytes=0, ignore=(): Increment(
+            since_sha=since, diff_text="", files=[]
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
+
+    assert result.exit_code == 0, result.output
+    assert "nothing reviewable changed" in result.output
+    assert "context" not in stubbed
+
+
+def test_without_an_identity_the_log_names_both_things_skipped() -> None:
+    import io
+    import json
+
+    from argus import telemetry
+
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+
+    assert cli._earlier_reviews(cli.PRTarget(FakeGitHub({}), "o", "r", 7), "") == []
+
+    event = json.loads(stream.getvalue().splitlines()[-1])
+    assert event["event"] == "earlier_reviews_skipped"
+    assert event["skips"] == ["known_findings", "incremental_review"]

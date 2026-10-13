@@ -325,6 +325,19 @@ class PRInfo(_Model):
     html_url: str
 
 
+class Increment(_Model):
+    """What changed on a pull request since Argus last reviewed it.
+
+    The review stage looks only at this; the pull request's whole diff stays
+    in the context, because inline comments may only go on lines it shows.
+    """
+
+    since_sha: str = Field(description="The head commit the earlier Argus review covered.")
+    diff_text: str
+    files: list[ChangedFile]
+    truncated_files: list[str] = Field(default_factory=list)
+
+
 class ReviewContext(_Model):
     """What the review stage is given: the change and where to read the code."""
 
@@ -341,6 +354,10 @@ class ReviewContext(_Model):
         description="Files left out of the review because they match an ignore pattern.",
     )
     pr: PRInfo | None = None
+    increment: Increment | None = Field(
+        default=None,
+        description="Set on a re-review: only these changes are reviewed, not the whole diff.",
+    )
 
 
 def rank_findings(findings: list[Finding]) -> list[Finding]:

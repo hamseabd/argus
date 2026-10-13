@@ -49,12 +49,27 @@ def lead_user_prompt(context: ReviewContext) -> str:
         )
     else:
         parts.append("# Local change")
-    parts.append("## Changed files\n\n" + "\n".join(f"- {_describe(f)}" for f in context.files))
-    if context.truncated_files:
+    files, diff_text, truncated = context.files, context.diff_text, context.truncated_files
+    if context.increment is not None:
+        increment = context.increment
+        files, diff_text, truncated = (
+            increment.files,
+            increment.diff_text,
+            increment.truncated_files,
+        )
+        parts.append(
+            "## Re-review\n\n"
+            f"Argus already reviewed this pull request at `{increment.since_sha[:7]}`, and "
+            "its findings from then stand. Review only what changed since: the files and diff "
+            "below. Read the rest of the pull request only to answer a question these changes "
+            "raise, such as whether a fix is complete."
+        )
+    parts.append("## Changed files\n\n" + "\n".join(f"- {_describe(f)}" for f in files))
+    if truncated:
         parts.append(
             "## Files omitted from the diff because of its size\n\n"
             "Read these with the Read tool if they matter to the review:\n\n"
-            + "\n".join(f"- {path}" for path in context.truncated_files)
+            + "\n".join(f"- {path}" for path in truncated)
         )
     if context.ignored_files:
         parts.append(
@@ -63,7 +78,7 @@ def lead_user_prompt(context: ReviewContext) -> str:
             "and were left out on purpose; do not spend your reads on them:\n\n"
             + "\n".join(f"- {path}" for path in context.ignored_files)
         )
-    parts.append("## Diff\n\n" + fenced(context.diff_text.rstrip("\n"), "diff"))
+    parts.append("## Diff\n\n" + fenced(diff_text.rstrip("\n"), "diff"))
     return "\n\n".join(parts) + "\n"
 
 
