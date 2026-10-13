@@ -83,6 +83,7 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         run_id=None,
         known=(),
         config=None,
+        verify_min_severity="low",
     ):
         calls["run_id"] = run_id
         calls["context"] = context

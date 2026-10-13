@@ -108,3 +108,10 @@ def test_run_config_describes_the_settings_and_the_prompts(monkeypatch: pytest.M
     assert config.diff_size_cap == DIFF_SIZE_CAP
     assert config.argus_version == __version__
     assert len(config.fingerprint) == 12
+
+
+def test_every_finding_is_verified_unless_a_floor_is_set(monkeypatch) -> None:
+    assert Settings(_env_file=None).verify_min_severity == "low"
+    monkeypatch.setenv("ARGUS_VERIFY_MIN_SEVERITY", "high")
+    assert Settings(_env_file=None).verify_min_severity == "high"
+    assert Settings(_env_file=None).run_config("0" * 12).verify_min_severity == "high"

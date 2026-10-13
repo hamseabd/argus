@@ -332,6 +332,7 @@ def test_run_config_fingerprint_changes_with_a_prompt_or_a_knob_but_not_the_vers
     assert run_config(prompts_sha="ba9876543210").fingerprint != config.fingerprint
     assert run_config(lead_effort="low").fingerprint != config.fingerprint
     assert run_config(verifier_max_turns=11).fingerprint != config.fingerprint
+    assert run_config(verify_min_severity="high").fingerprint != config.fingerprint
     assert run_config(argus_version="9.9.9").fingerprint == config.fingerprint
 
 
@@ -401,3 +402,8 @@ def test_a_replacement_is_bounded() -> None:
 
     with pytest.raises(ValidationError, match="replacement"):
         Finding(**base, replacement="x" * (MAX_REPLACEMENT_LENGTH + 1))
+
+
+def test_the_verify_floor_in_a_run_config_must_be_a_severity() -> None:
+    with pytest.raises(ValidationError, match="verify_min_severity"):
+        run_config(verify_min_severity="urgent")

@@ -425,6 +425,25 @@ def test_an_inconclusive_verdict_leaves_the_finding_unverified_and_keeps_the_ver
     assert [v.verdict for v in result.verdicts] == ["inconclusive"]
 
 
+def test_findings_below_the_verify_floor_are_reported_unverified_without_a_query(
+    tmp_path: Path,
+) -> None:
+    review = Review(
+        summary="s",
+        files_reviewed=[],
+        findings=[finding(1, severity="high"), finding(2, severity="low")],
+    )
+    agent = FakeAgent(review, {"correctness-1": "confirmed"})
+
+    result = asyncio.run(run_review(context(tmp_path), agent, verify_min_severity="medium"))
+
+    assert [c[0] for c in agent.verify_calls] == ["correctness-1"]
+    assert {f.id: f.status for f in result.review.findings} == {
+        "correctness-1": "confirmed",
+        "correctness-2": "unverified",
+    }
+
+
 def test_a_failed_verification_logs_its_error_without_a_token(tmp_path: Path) -> None:
     stream = io.StringIO()
     telemetry.configure(log_format="json", stream=stream)

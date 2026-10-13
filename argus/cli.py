@@ -212,6 +212,7 @@ def review(
                     run_id=run_id,
                     known=known,
                     config=settings.run_config(prompts_digest()),
+                    verify_min_severity=settings.verify_min_severity,
                 )
             )
         except ArgusError as exc:

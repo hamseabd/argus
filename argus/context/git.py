@@ -71,6 +71,12 @@ def increment_since(
     )
 
 
+def diff_between(repo: Path, base: str, head: str) -> str:
+    """The diff a pull request shows: from the merge base of base and head, to head."""
+    merge_base = run_git(repo, "merge-base", "--end-of-options", base, head)
+    return _diff(repo, merge_base, head)
+
+
 def _diff(repo: Path, *revisions: str) -> str:
     return run_git(
         repo,
