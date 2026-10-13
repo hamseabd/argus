@@ -1,6 +1,7 @@
 """Argus command line."""
 
 import asyncio
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ from argus.context.github import GitHubClient, parse_repo, pr_context, repo_from
 from argus.domain.errors import ArgusError, GitHubError
 from argus.domain.models import SEVERITY_ORDER, Finding, KnownFinding, ReviewContext, ReviewResult
 from argus.pipeline import run_review
+from argus.report.feedback import collect_feedback, render_feedback, summarize_feedback
 from argus.report.github_review import build_review, known_findings_from, last_reviewed_head
 from argus.report.markdown import render_report
 from argus.report.summary import render_summary
@@ -208,6 +210,61 @@ def _nothing_to_review(context: ReviewContext) -> str:
             f"({', '.join(context.ignored_files)}); pass ARGUS_IGNORE_PATHS= to review them"
         )
     return "nothing to review: the diff is empty"
+
+
+@app.command()
+def feedback(
+    repo: Annotated[
+        str | None,
+        typer.Option("--repo", help="owner/name; defaults to GITHUB_REPOSITORY, then origin."),
+    ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option("--since", help="Only findings posted on or after this date (YYYY-MM-DD)."),
+    ] = None,
+    json_path: Annotated[
+        Path | None, typer.Option("--json", help="Write every posted finding here, rated or not.")
+    ] = None,
+) -> None:
+    """Read the reactions on Argus's posted findings: precision as the readers judged it.
+
+    Needs GITHUB_TOKEN and ARGUS_REVIEWER_LOGIN, the login Argus posts as.
+    """
+    telemetry.configure()
+    try:
+        settings = Settings()
+    except ValidationError as exc:
+        _fail(f"invalid ARGUS_* setting: {_settings_problem(exc)}")
+    if not settings.reviewer_login:
+        _fail("ARGUS_REVIEWER_LOGIN is required: only that login's comments are read")
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token:
+        _fail("GITHUB_TOKEN is required for feedback")
+    slug = repo or os.environ.get("GITHUB_REPOSITORY") or repo_from_remote(Path.cwd())
+    if not slug:
+        _fail("cannot determine the repository; pass --repo owner/name")
+    try:
+        owner, name = parse_repo(slug)
+    except ValueError as exc:
+        _fail(str(exc))
+    since_iso = f"{since}T00:00:00Z" if since else None
+    try:
+        comments = GitHubClient(token).repo_review_comments(owner, name, since=since_iso)
+    except GitHubError as exc:
+        _fail(str(exc))
+    records = collect_feedback(comments, settings.reviewer_login)
+    summary = summarize_feedback(records)
+    telemetry.get_logger().info(
+        "feedback", repo=slug, findings=summary.findings, rated=summary.rated
+    )
+    if json_path is not None:
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "summary": summary.model_dump(mode="json"),
+            "findings": [r.model_dump(mode="json") for r in records],
+        }
+        json_path.write_text(json.dumps(payload, indent=2) + "\n")
+    typer.echo(render_feedback(summary), nl=False)
 
 
 def gate_tripped(findings: list[Finding], fail_on: str) -> bool:

@@ -234,3 +234,23 @@ def test_pr_reviews_and_review_comments_paginate() -> None:
     assert [c["id"] for c in client().pr_review_comments("o", "r", 7)] == [9]
     assert reviews.call_count == 2
     assert comments.calls.last.request.url.params["per_page"] == "100"
+
+
+@respx.mock
+def test_repo_review_comments_page_through_the_repository_since_a_date() -> None:
+    route = respx.get(f"{API}/repos/o/r/pulls/comments")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            json=[{"id": 1}],
+            headers={"Link": f'<{API}/repos/o/r/pulls/comments?page=2>; rel="next"'},
+        ),
+        httpx.Response(200, json=[{"id": 2}]),
+    ]
+
+    comments = client().repo_review_comments("o", "r", since="2026-09-01T00:00:00Z")
+
+    assert [c["id"] for c in comments] == [1, 2]
+    params = route.calls[0].request.url.params
+    assert params["since"] == "2026-09-01T00:00:00Z"
+    assert (params["sort"], params["direction"], params["per_page"]) == ("created", "asc", "100")

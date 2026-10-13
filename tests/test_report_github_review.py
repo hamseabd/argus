@@ -359,3 +359,41 @@ def test_an_incremental_review_says_what_it_covered() -> None:
     body = build_review(result([finding()]), ctx)["body"]
 
     assert f"Reviewed the changes since `{'b' * 7}`" in body
+
+
+def test_the_review_asks_readers_to_rate_the_inline_findings() -> None:
+    body = build_review(result([finding()]), context())["body"]
+
+    assert "React 👍 or 👎 on a finding" in body
+
+
+def test_a_review_with_no_inline_finding_asks_for_nothing() -> None:
+    body = build_review(result([]), context())["body"]
+
+    assert "React" not in body
+
+
+def test_an_inline_finding_posted_without_a_status_is_still_known() -> None:
+    review = {
+        "id": 1,
+        "user": {"login": "argus[bot]", "type": "Bot"},
+        "body": REVIEW_MARKER + "\n\nEarlier.",
+        "html_url": "u",
+    }
+    comment = {
+        "pull_request_review_id": 1,
+        "path": "a.py",
+        "line": 4,
+        "body": "**[HIGH] Leak** · correctness · confidence 0.90",
+        "user": {"login": "argus[bot]", "type": "Bot"},
+        "html_url": "c",
+    }
+
+    (known,) = known_findings_from([review], [comment], "argus[bot]")
+
+    assert (known.title, known.severity, known.category, known.line) == (
+        "Leak",
+        "high",
+        "correctness",
+        4,
+    )

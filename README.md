@@ -201,6 +201,20 @@ Cost is averaged over every case, failed runs included, because a failed run sti
 | verify | not run yet | | | | | | | | |
 | no-verify | not run yet | | | | | | | | |
 
+### Feedback from real pull requests
+
+The corpus has known answers; real pull requests have readers.
+Every review with inline findings asks them to react 👍 or 👎 on each one, and `argus feedback` reads those reactions and the replies back from GitHub:
+
+```bash
+export GITHUB_TOKEN=... ARGUS_REVIEWER_LOGIN=argus-code-reviewer-agent[bot]
+argus feedback --repo owner/name --since 2026-09-01 --json feedback.json
+```
+
+It prints the precision readers gave each category and each status: of the findings someone rated, how many were worth raising.
+A finding with more 👍 than 👎 counts as helpful, more 👎 as not, and a tie or no reaction as unrated.
+Only comments by the login Argus posts as are read, the same identity rule as known findings.
+
 ## Usage
 
 ```bash
