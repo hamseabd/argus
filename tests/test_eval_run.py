@@ -39,9 +39,11 @@ class OracleAgent:
     def __init__(self) -> None:
         self.roots: list[Path] = []
         self.verified: list[str] = []
+        self.truncated: list[list[str]] = []
 
     async def review(self, context: ReviewContext) -> StageOutcome[Review]:
         self.roots.append(context.repo_root)
+        self.truncated.append(list(context.truncated_files))
         findings = [
             {
                 "file": bug.file,
@@ -225,13 +227,14 @@ class FakeLiveRun:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    async def __call__(self, cases, agent, *, modes, out_dir, label, verify_concurrency):
+    async def __call__(self, cases, agent, *, modes, out_dir, label, verify_concurrency, trials):
         self.calls.append(
             {
                 "cases": [c.name for c in cases],
                 "modes": modes,
                 "out_dir": out_dir,
                 "verify_concurrency": verify_concurrency,
+                "trials": trials,
             }
         )
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -279,7 +282,13 @@ def test_main_writes_under_out_and_echoes_the_table(
 
     assert result.exit_code == 0, result.output
     assert live_run.calls == [
-        {"cases": ["sqli"], "modes": ["verify"], "out_dir": out, "verify_concurrency": 7}
+        {
+            "cases": ["sqli"],
+            "modes": ["verify"],
+            "out_dir": out,
+            "verify_concurrency": 7,
+            "trials": 1,
+        }
     ]
     assert result.stdout == "| Mode | Precision |\n"
 
@@ -291,3 +300,45 @@ def test_main_defaults_to_every_mode_and_every_case(live_run: FakeLiveRun, tmp_p
     (call,) = live_run.calls
     assert call["modes"] == ["verify", "no-verify"]
     assert call["cases"] == [c.name for c in load_cases()]
+
+
+def test_each_trial_runs_every_case_and_is_recorded(tmp_path: Path) -> None:
+    agent = OracleAgent()
+    cases = [CASES["sqli"], CASES["clean_docs_only"]]
+
+    paths = asyncio.run(
+        run_eval(cases, agent, modes=["no-verify"], out_dir=tmp_path, label="l", trials=3)
+    )
+
+    assert len(agent.roots) == 6
+    record = json.loads(paths.json.read_text())
+    entries = record["modes"]["no-verify"]["cases"]
+    assert [(e["score"]["case"], e["score"]["trial"]) for e in entries] == [
+        ("sqli", 1),
+        ("clean_docs_only", 1),
+        ("sqli", 2),
+        ("clean_docs_only", 2),
+        ("sqli", 3),
+        ("clean_docs_only", 3),
+    ]
+    assert record["trials"] == 3
+    assert record["modes"]["no-verify"]["summary"]["true_positives"] == 3
+
+
+def test_a_case_with_its_own_diff_cap_is_reviewed_under_it(tmp_path: Path) -> None:
+    agent = OracleAgent()
+    case = CASES["truncated_diff_bug"]
+
+    run(agent, ["truncated_diff_bug"], ["no-verify"], tmp_path)
+
+    assert case.diff_size_cap is not None
+    assert agent.truncated == [[case.expected[0].file]]
+
+
+def test_main_passes_trials_through(live_run, tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        evals.run.app, ["--out", str(tmp_path), "--case", "sqli", "--trials", "2"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert live_run.calls[0]["trials"] == 2

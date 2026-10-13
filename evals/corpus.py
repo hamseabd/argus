@@ -1,7 +1,8 @@
 """The seeded-bug corpus: cases on disk and the git repository each one becomes.
 
 A case is a directory under evals/cases/ with a `base/` snapshot, a `seeded/`
-snapshot, and `expected.yaml`, the bugs the seeded change introduces. The
+snapshot, and `expected.yaml`, the bugs the seeded change introduces, plus an
+optional `case.yaml` for a case that is reviewed under other settings. The
 repository layout is the one tests/helpers.build_seeded_repo uses: `main`
 holds the base, a `feature` branch holds the seeded change, and the working
 tree is left on `feature`, so `argus review --diff --base main` sees exactly
@@ -26,22 +27,48 @@ CLEAN_PREFIX = "clean_"
 """Clean controls are named clean_*: a change with no bug, which should draw no finding."""
 
 
-class ExpectedBug(BaseModel):
-    """One seeded bug: where it is in the seeded version and how Argus should file it."""
+class Location(BaseModel):
+    """A file and a line span in the seeded version."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     file: str
     line_start: int = Field(ge=1)
     line_end: int = Field(ge=1)
-    category: Category
-    severity: Severity
 
     @model_validator(mode="after")
-    def _end_follows_start(self) -> "ExpectedBug":
+    def _end_follows_start(self) -> "Location":
         if self.line_end < self.line_start:
             raise ValueError(f"line_end {self.line_end} precedes line_start {self.line_start}")
         return self
+
+
+class ExpectedBug(Location):
+    """One seeded bug: where it is in the seeded version and how Argus should file it.
+
+    `also` lists other places a reviewer may rightly report the same bug, such
+    as the unchanged caller a changed contract breaks. Only the main location
+    must be in the diff; any of them matches, and the bug still counts once.
+    """
+
+    category: Category
+    severity: Severity
+    also: tuple[Location, ...] = ()
+
+    @property
+    def locations(self) -> tuple[Location, ...]:
+        return (
+            Location(file=self.file, line_start=self.line_start, line_end=self.line_end),
+            *self.also,
+        )
+
+
+class CaseConfig(BaseModel):
+    """case.yaml, optional: how this case is reviewed when it differs from the default."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    diff_size_cap: int | None = Field(default=None, ge=1)
 
 
 @dataclass(frozen=True)
@@ -49,6 +76,8 @@ class Case:
     name: str
     path: Path
     expected: tuple[ExpectedBug, ...]
+    diff_size_cap: int | None = None
+    """The diff budget this case is reviewed under; None is Argus's default."""
 
     @property
     def clean(self) -> bool:
@@ -64,7 +93,22 @@ def load_cases(root: Path = CASES_DIR) -> list[Case]:
             expected = tuple(ExpectedBug.model_validate(item) for item in raw)
         except ValueError as exc:
             raise ValueError(f"{path.name}/expected.yaml: {exc}") from exc
-        cases.append(Case(name=path.name, path=path, expected=expected))
+        config_file = path / "case.yaml"
+        raw_config = (
+            yaml.safe_load(config_file.read_text(encoding="utf-8")) if config_file.exists() else {}
+        )
+        try:
+            config = CaseConfig.model_validate(raw_config or {})
+        except ValueError as exc:
+            raise ValueError(f"{path.name}/case.yaml: {exc}") from exc
+        cases.append(
+            Case(
+                name=path.name,
+                path=path,
+                expected=expected,
+                diff_size_cap=config.diff_size_cap,
+            )
+        )
     return cases
 
 
