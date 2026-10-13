@@ -23,6 +23,7 @@ API_URL = "https://api.github.com"
 API_VERSION = "2022-11-28"
 JSON_MEDIA_TYPE = "application/vnd.github+json"
 DIFF_MEDIA_TYPE = "application/vnd.github.diff"
+RAW_MEDIA_TYPE = "application/vnd.github.raw+json"
 _PAGE_SIZE = 100
 _STATUS_MAP: dict[str, ChangedFileStatus] = {
     "added": "added",
@@ -102,6 +103,19 @@ class GitHubClient:
             url = response.links.get("next", {}).get("url")
             params = None  # the next link carries its own query string
         return items
+
+    def default_branch(self, owner: str, repo: str) -> str:
+        return str(self._request("GET", f"/repos/{owner}/{repo}").json()["default_branch"])
+
+    def file_text(self, owner: str, repo: str, path: str, ref: str) -> str:
+        """A file's raw contents at a ref; a missing file is a GitHubError with status 404."""
+        response = self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/contents/{path}",
+            accept=RAW_MEDIA_TYPE,
+            params={"ref": ref},
+        )
+        return response.text
 
     def post_review(self, owner: str, repo: str, number: int, payload: dict[str, Any]) -> str:
         response = self._request("POST", f"{_pull(owner, repo, number)}/reviews", json=payload)

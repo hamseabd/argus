@@ -15,6 +15,7 @@ from argus.agent.prompts import prompts_digest
 from argus.auth import credential_problem, credential_source
 from argus.context.git import head_sha, increment_since, local_context, repo_root
 from argus.context.github import GitHubClient, parse_repo, pr_context, repo_from_remote
+from argus.context.rules import rules_from_git, rules_from_github
 from argus.domain.errors import ArgusError, GitHubError
 from argus.domain.models import SEVERITY_ORDER, Finding, KnownFinding, ReviewContext, ReviewResult
 from argus.pipeline import run_review
@@ -156,6 +157,7 @@ def review(
         try:
             if target is None:
                 context = local_context(Path.cwd(), base, settings.diff_size_cap, ignore=patterns)
+                rules = rules_from_git(context.repo_root, base)
             else:
                 root = repo_root(Path.cwd())
                 context = pr_context(
@@ -168,6 +170,7 @@ def review(
                     ignore=patterns,
                 )
                 _warn_on_head_mismatch(context)
+                rules = rules_from_github(target.client, target.owner, target.repo)
                 if not include_known:
                     reviews = _earlier_reviews(target, settings.reviewer_login)
                     known = _known_findings(target, settings.reviewer_login, reviews)
@@ -175,6 +178,9 @@ def review(
                     # an open finding from an earlier push, and the gate would pass.
                     if not full and fail_on is None:
                         context = _narrow_to_increment(context, reviews, settings, patterns)
+            if rules:
+                telemetry.get_logger().info("review_rules", chars=len(rules))
+                context = context.model_copy(update={"review_rules": rules})
             if not context.files and not context.diff_text.strip():
                 _fail(_nothing_to_review(context))
             result = asyncio.run(
