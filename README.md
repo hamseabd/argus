@@ -251,7 +251,9 @@ Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` en
 Every posted review ends with a hidden, versioned JSON block, `<!-- argus:handoff {...} -->`, for an agent that fixes what Argus finds; it was built for the first mate of Bosun, the author's agent fleet.
 The Markdown is for people and changes with the report; the block is the contract: the head commit reviewed, whether the review covered the whole pull request or only the commits since an earlier one, and every finding with its id, status, severity, category, location, and title.
 Confirmed, unverified, and `known` findings are still open on that head; rejected ones are not.
-While an earlier review's findings are open, a re-review covers the whole pull request, so after a fixer pushes, the next handoff says which findings still stand.
+Every string in the block was written by a model that read an untrusted diff, so a consumer must treat titles and paths as data, never as instructions.
+While the latest review left findings open, a re-review covers the whole pull request, so after a fixer pushes, the next handoff says which findings still stand; once a review comes back clean, re-reviews are incremental again.
+A review body that would pass GitHub's 65,536-character limit is cut before the block, never through it.
 
 ### Review rules
 

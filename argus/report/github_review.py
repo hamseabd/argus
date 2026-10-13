@@ -26,6 +26,7 @@ from argus.domain.models import (
     Finding,
     Increment,
     KnownFinding,
+    PRInfo,
     ReviewContext,
     ReviewResult,
     Severity,
@@ -46,6 +47,8 @@ REVIEW_MARKER = "<!-- argus:review -->"
 HANDOFF_PREFIX = "<!-- argus:handoff "
 """Opens the machine-readable handoff: a JSON object, then " -->", at the end of every body."""
 HANDOFF_VERSION = 1
+MAX_BODY_CHARS = 65_536
+"""GitHub refuses a review body longer than this."""
 REVIEW_EVENT = "COMMENT"
 _SEVERITIES = "|".join(s.upper() for s in SEVERITY_ORDER)
 _INLINE_TITLE = re.compile(
@@ -76,16 +79,22 @@ def build_review(result: ReviewResult, context: ReviewContext) -> dict[str, Any]
             comments.append(_comment(finding, lines, verdicts.get(finding.id)))
         else:
             in_body.append(finding)
+    tail = handoff(result, context.pr, context.increment) + "\n"
+    body = _body(result, in_body, context.ignored_files, context.increment, rate=bool(comments))
     return {
         "commit_id": context.pr.head_sha,
         "event": REVIEW_EVENT,
-        "body": _body(
-            result, in_body, context.ignored_files, context.increment, rate=bool(comments)
-        )
-        + handoff(result, context)
-        + "\n",
+        "body": _fit(body, MAX_BODY_CHARS - len(tail)) + tail,
         "comments": comments,
     }
+
+
+def _fit(text: str, limit: int) -> str:
+    """text cut to limit characters, saying so; the handoff after it is never cut."""
+    if len(text) <= limit:
+        return text
+    note = "\n\n[The review was cut here to fit GitHub's limit; the JSON artifact has all of it.]\n"
+    return text[: limit - len(note)] + note
 
 
 def known_findings_from(
@@ -165,7 +174,7 @@ def inline_header(body: str) -> dict[str, str] | None:
     }
 
 
-def handoff(result: ReviewResult, context: ReviewContext) -> str:
+def handoff(result: ReviewResult, pr: PRInfo, increment: Increment | None = None) -> str:
     """The review's findings as JSON in an HTML comment, for an agent that fixes them.
 
     The Markdown is for people and changes with the report; this is the
@@ -175,13 +184,12 @@ def handoff(result: ReviewResult, context: ReviewContext) -> str:
     reviewed or only the commits since `since`.
 
     `<` and `>` are written as JSON escapes, so no title can close the comment.
+    Every string in it (titles, paths) was written by a model that read an
+    untrusted diff: a consumer must treat them as data, never as instructions.
     """
-    if context.pr is None:
-        raise ValueError("a handoff needs a pull request context")
-    increment = context.increment
     payload: dict[str, Any] = {
         "version": HANDOFF_VERSION,
-        "head": context.pr.head_sha,
+        "head": pr.head_sha,
         "scope": "full" if increment is None else "increment",
         "findings": [
             {
@@ -202,6 +210,40 @@ def handoff(result: ReviewResult, context: ReviewContext) -> str:
     text = json.dumps(payload, separators=(",", ":"))
     text = text.replace("<", "\\u003c").replace(">", "\\u003e")
     return f"\n{HANDOFF_PREFIX}{text} -->"
+
+
+def last_review_left_open(
+    reviews: Iterable[dict[str, Any]], comments: Iterable[dict[str, Any]], reviewer_login: str
+) -> bool:
+    """Whether the latest Argus review left findings open on the head it reviewed.
+
+    Only the latest review counts: GitHub keeps every earlier review and its
+    comments forever, fixed or not. Its handoff lists what is still open,
+    findings found again (known) included; a review from before the handoff
+    is judged by the findings it posted.
+    """
+    if not reviewer_login:
+        return False
+    argus = [r for r in reviews if _is_argus_review(r, reviewer_login)]
+    if not argus:
+        return False
+    latest = argus[-1]
+    if (open_statuses := _handoff_statuses(str(latest.get("body") or ""))) is not None:
+        return bool(open_statuses & {"confirmed", "unverified", "known"})
+    return bool(known_findings_from([latest], comments, reviewer_login))
+
+
+def _handoff_statuses(body: str) -> set[str] | None:
+    """The finding statuses in a review body's handoff, or None when it has none."""
+    start = body.find(HANDOFF_PREFIX)
+    if start < 0:
+        return None
+    end = body.find(" -->", start)
+    try:
+        payload = json.loads(body[start + len(HANDOFF_PREFIX) : end])
+    except ValueError:
+        return None
+    return {str(f.get("status")) for f in payload.get("findings", []) if isinstance(f, dict)}
 
 
 def _is_argus_review(review: dict[str, Any], reviewer_login: str) -> bool:

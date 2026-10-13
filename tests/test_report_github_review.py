@@ -14,9 +14,11 @@ from argus.domain.models import (
 )
 from argus.report.github_review import (
     HANDOFF_PREFIX,
+    MAX_BODY_CHARS,
     REVIEW_MARKER,
     build_review,
     known_findings_from,
+    last_review_left_open,
     last_reviewed_head,
 )
 
@@ -512,3 +514,64 @@ def test_a_finding_listed_in_the_body_shows_its_replacement() -> None:
 
     assert "**Replacement for line 9:**" in body
     assert "return None" in body
+
+
+def handed_off(review_id: int, commit: str, *statuses: str) -> dict:
+    """An Argus review whose body carries a handoff listing findings with these statuses."""
+    ctx = context().model_copy(
+        update={"pr": context().pr.model_copy(update={"head_sha": commit})}  # type: ignore[union-attr]
+    )
+    findings = [finding(id=f"correctness-{i}", status=s) for i, s in enumerate(statuses, 1)]
+    return argus_review(review_id, commit) | {"body": build_review(result(findings), ctx)["body"]}
+
+
+def test_findings_are_open_while_the_latest_review_hands_off_an_open_one() -> None:
+    assert last_review_left_open([handed_off(1, "a" * 40, "known")], [], "argus[bot]")
+    assert last_review_left_open([handed_off(1, "a" * 40, "unverified")], [], "argus[bot]")
+
+
+def test_a_clean_latest_review_closes_what_earlier_ones_posted() -> None:
+    # Old reviews and their comments stay on the PR forever; only the latest counts.
+    reviews = [handed_off(1, "a" * 40, "confirmed"), handed_off(2, "b" * 40, "rejected")]
+    comments = [
+        {
+            "pull_request_review_id": 1,
+            "path": "app/cache.py",
+            "line": 2,
+            "body": "**[HIGH] Stale entry** · correctness · confirmed · confidence 0.80",
+            "user": {"login": "argus[bot]", "type": "Bot"},
+            "html_url": "c",
+        }
+    ]
+
+    assert not last_review_left_open(reviews, comments, "argus[bot]")
+
+
+def test_a_latest_review_from_before_the_handoff_is_judged_by_what_it_posted() -> None:
+    old = argus_review(1, "a" * 40)
+    comment = {
+        "pull_request_review_id": 1,
+        "path": "a.py",
+        "line": 3,
+        "body": "**[HIGH] Leak** · correctness · confirmed · confidence 0.80",
+        "user": {"login": "argus[bot]", "type": "Bot"},
+        "html_url": "c",
+    }
+
+    assert last_review_left_open([old], [comment], "argus[bot]")
+    assert not last_review_left_open([old], [], "argus[bot]")
+    assert not last_review_left_open([], [comment], "argus[bot]")
+
+
+def test_an_oversized_review_is_cut_to_fit_and_keeps_its_handoff_whole() -> None:
+    long = "x" * 5000
+    off_diff = [
+        finding(id=f"correctness-{i}", line=50 + i, description=long, evidence=long)
+        for i in range(1, 15)
+    ]
+
+    body = build_review(result(off_diff), context())["body"]
+
+    assert len(body) <= MAX_BODY_CHARS
+    assert "cut here to fit GitHub's limit" in body
+    assert len(handoff_of(body)["findings"]) == 14

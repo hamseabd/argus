@@ -578,3 +578,34 @@ def test_without_an_identity_the_log_names_both_things_skipped() -> None:
     event = json.loads(stream.getvalue().splitlines()[-1])
     assert event["event"] == "earlier_reviews_skipped"
     assert event["skips"] == ["known_findings", "incremental_review"]
+
+
+def test_once_the_latest_review_is_clean_re_reviews_are_incremental_again(
+    stubbed: dict, increments: list
+) -> None:
+    # A finding posted long ago stays on the PR; it must not force full reviews forever.
+    stubbed["reviews"] = [
+        earlier_review("c" * 40) | {"id": 1},
+        earlier_review("b" * 40)
+        | {
+            "id": 2,
+            "body": '<!-- argus:review -->\n\nClean.\n<!-- argus:handoff {"version":1,'
+            '"head":"' + "b" * 40 + '","scope":"full","findings":[]} -->',
+        },
+    ]
+    stubbed["comments"] = [
+        {
+            "pull_request_review_id": 1,
+            "path": "a.py",
+            "line": 3,
+            "original_line": 3,
+            "body": "**[MEDIUM] Stale entry** · correctness · confirmed · confidence 0.80",
+            "html_url": "https://github.com/o/r/pull/7#discussion_1",
+            "user": {"login": LOGIN, "type": "Bot"},
+        }
+    ]
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
+
+    assert result.exit_code == 0, result.output
+    assert increments == [("b" * 40, "a" * 40)]
