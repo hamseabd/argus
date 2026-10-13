@@ -74,3 +74,15 @@ def test_feedback_needs_the_identity_argus_posts_as(monkeypatch) -> None:
 
     assert result.exit_code == 1
     assert "ARGUS_REVIEWER_LOGIN" in result.output
+
+
+def test_a_failure_message_is_redacted_before_it_is_printed_or_logged(capsys) -> None:
+    import pytest
+    import typer
+
+    from argus import cli
+
+    with pytest.raises(typer.Exit):
+        cli._fail("GitHub said: token ghs_" + "b" * 36 + " is bad")
+
+    assert "ghs_bbbb" not in capsys.readouterr().err

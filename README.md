@@ -110,10 +110,10 @@ Held and recovered answers are counted in the stage metrics and the report foote
 
 - `tools` and `allowed_tools` restrict the model to `Read`, `Grep`, `Glob`, `Agent`, `mcp__argus__git_history`, and, in the review stage, `mcp__argus__report_finding`, which only records a finding in memory: least privilege at the tool layer.
 - A `PreToolUse` hook denies `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`, `WebFetch`, and `WebSearch` with a reason the model can read, so it does not retry.
-- A second `PreToolUse` hook confines `Read`, `Grep`, and `Glob` to the repository under review. Each path is resolved with symlinks followed and refused if it leaves the repository or enters `.git`, so a prompt injection, or a symlink the change adds, cannot point a reviewer at `/proc/self/environ` or the CLI's credentials and have the contents quoted in a posted finding.
+- A second `PreToolUse` hook confines `Read`, `Grep`, and `Glob` to the repository under review. Each path is resolved with symlinks followed and refused if it leaves the repository or enters `.git`, so a prompt injection, or a symlink the change adds, cannot point a reviewer at `/proc/self/environ` or the CLI's credentials and have the contents quoted in a posted finding. A search reaches files by pattern, so the repository is scanned once for links that lead out of it or into `.git`, and any `Grep` or `Glob` whose scope holds one is refused, as is any pattern that could name `.git` (`.gi?`, `[.]git`).
 - The CLI process inherits the review step's environment, so the GitHub, LangSmith, and app credentials are blanked in it; it keeps only the Claude token it runs on. The pull request checkout keeps no token in its git config (`persist-credentials: false`).
 - The pull request's title and description, and the diff, reach the lead inside code fences longer than any backtick run in them, labelled as data, so the author's text cannot close its block and pose as instructions.
-- Every string in the `ReviewResult` is scrubbed of token-shaped text (Claude, GitHub, and LangSmith formats) before the review is posted, the job summary written, or the JSON artifact kept.
+- Every string in the `ReviewResult` is scrubbed of token-shaped text (Claude, GitHub, and LangSmith formats) before the review is posted, the job summary written, or the JSON artifact kept, and so is every error message before it is logged or printed. The verifier gets the reporter's words fenced and labelled as a claim to test, like the diff.
 - `setting_sources=[]` isolates every query from the repository under review: its `.claude/` settings, hooks, and `CLAUDE.md` cannot reach the reviewer.
 - `git_history`, the one custom tool that reads, is served by an in-process MCP server and runs `git log -L` for a line range and refuses paths outside the repository root. In local mode it maps working-tree line numbers to HEAD through the uncommitted hunks and labels lines that have no history yet.
 - The dogfood workflow installs and runs Argus from the default branch and only reads the pull request head, so the trust boundary is the checkout: a PR cannot execute its own code next to the token.
@@ -185,7 +185,7 @@ The runner builds the same layout the live test uses, `main` holding the base an
 | `clean_correct_fix` | `median` fixed to average the two middle values, as its docstring already says | none expected |
 
 **The scoring** ([`evals/score.py`](evals/score.py)).
-A finding matches a seeded bug when it names the same category and its line span, at most 15 lines wide, comes within three lines of any of the bug's locations.
+A finding matches a seeded bug when it names the same category and its line span, at most 15 lines wide, comes within three lines of one of the bug's locations in the same file.
 A finding counts as reported unless the verifier rejected it, the same rule the report uses.
 Precision and recall are pooled over the corpus; a second finding on an already-matched bug is a duplicate, not a false positive.
 The clean-control false-positive rate is the share of clean controls with any reported finding, over the controls that completed; a crashed control reviewed nothing, so it counts as an error, never as a clean pass.
