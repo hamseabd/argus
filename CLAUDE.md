@@ -30,6 +30,7 @@ The README is the design document; keep it accurate when behavior changes. Worki
 uv sync                      # create .venv and install everything
 uv run ruff check .          # lint
 uv run ruff format --check . # format check
+uv run mypy                  # strict type check of the package
 uv run pytest -q             # unit tests (live tests excluded)
 uv run pytest -m live        # opt-in: real SDK against the seeded-bug fixture
 uv run argus version

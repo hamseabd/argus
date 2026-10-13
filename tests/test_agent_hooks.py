@@ -607,6 +607,25 @@ def test_a_release_after_the_specialists_report_is_logged_with_the_count() -> No
     assert released["reason"] == "reported"
 
 
+def test_every_deny_path_records_the_refusal_on_the_trace() -> None:
+    """The three refusals share _deny, so each path pins both of its effects: payload and span."""
+    state = HookState(read_budget=0)
+    state.recorder = RecorderSpy()
+    hooks = build_hooks(state)
+    _subagent(hooks, "SubagentStart", "a-1", "security")
+
+    assert _held(state) is True
+    read = asyncio.run(limit_lead_reading(state)(hook_input("Read"), None, {"signal": None}))
+    write = asyncio.run(deny_mutating_tools(state)(hook_input("Write"), None, {"signal": None}))
+
+    assert read["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert write["hookSpecificOutput"]["permissionDecision"] == "deny"
+    denied = [call for call in state.recorder.calls if call[0] == "denied"]
+    assert denied == [("denied", _answer()["tool_use_id"])] + [
+        ("denied", hook_input(name)["tool_use_id"]) for name in ("Read", "Write")
+    ]
+
+
 def test_a_hold_limit_of_zero_never_holds() -> None:
     state = HookState(answer_hold_limit=0)
     hooks = build_hooks(state)

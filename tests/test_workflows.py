@@ -40,6 +40,15 @@ def test_review_job_has_a_timeout() -> None:
     assert 0 < load("review.yml")["jobs"]["review"]["timeout-minutes"] <= 60
 
 
+def test_ci_type_checks_the_package_between_format_and_tests() -> None:
+    """mypy --strict is a gate, not advice: CI runs it on every push and pull request."""
+    names = [step.get("name") for step in steps("ci.yml", "lint-and-test")]
+    commands = {step.get("name"): step.get("run") for step in steps("ci.yml", "lint-and-test")}
+
+    assert names.index("Format") < names.index("Type check") < names.index("Test")
+    assert commands["Type check"] == "uv run mypy"
+
+
 def test_review_skips_drafts_and_fork_pull_requests() -> None:
     condition = load("review.yml")["jobs"]["review"]["if"]
 

@@ -290,6 +290,7 @@ An opt-in live test is the end-to-end smoke check: it builds a repository with a
 uv sync                      # create .venv and install everything
 uv run ruff check .          # lint
 uv run ruff format --check . # format check
+uv run mypy                  # strict type check of the package
 uv run pytest -q             # unit tests, offline
 uv run pytest -m live -s     # opt-in: the real SDK against a seeded-bug fixture
 uv run python -m evals.run   # opt-in: score the real SDK over the eval corpus

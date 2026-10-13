@@ -78,7 +78,7 @@ class GitHubClient:
 
     def post_review(self, owner: str, repo: str, number: int, payload: dict[str, Any]) -> str:
         response = self._request("POST", f"{_pull(owner, repo, number)}/reviews", json=payload)
-        return response.json()["html_url"]
+        return str(response.json()["html_url"])
 
     def _request(
         self, method: str, url: str, *, accept: str = JSON_MEDIA_TYPE, **kwargs: Any

@@ -46,10 +46,10 @@ from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
 from opentelemetry.util.types import AttributeValue
 
+from argus.agent.hooks import AGENT_TOOL
 from argus.telemetry import get_logger
 from argus.tracing import ERROR_CHARS, KIND, clean, meta, redact, summarize, tracer
 
-AGENT_TOOL = "Agent"
 _NAME_CHARS = 64
 """Span names built from hook data are model-controlled, so they are redacted and bounded."""
 _UNFINISHED = "the query ended before this call finished"

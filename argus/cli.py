@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -28,6 +29,16 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+
+@dataclass(frozen=True)
+class PRTarget:
+    """Which pull request --pr names and the client that reaches it."""
+
+    client: GitHubClient
+    owner: str
+    repo: str
+    number: int
 
 
 @app.callback()
@@ -91,18 +102,24 @@ def review(
     telemetry.configure(settings.log_format, level=settings.log_level)
     telemetry.bind_run(run_id=run_id)
     _check_credentials()
-    github = _github_target(pr, repo) if pr is not None else None
+    target = _github_target(pr, repo) if pr is not None else None
 
     with tracing.session():
         from argus.agent.review import SdkReviewAgent  # keep the SDK import lazy
 
         try:
-            if github is None:
+            if target is None:
                 context = local_context(Path.cwd(), base, settings.diff_size_cap)
             else:
-                client, owner, name = github
                 root = repo_root(Path.cwd())
-                context = pr_context(client, owner, name, pr, root, settings.diff_size_cap)
+                context = pr_context(
+                    target.client,
+                    target.owner,
+                    target.repo,
+                    target.number,
+                    root,
+                    settings.diff_size_cap,
+                )
                 _warn_on_head_mismatch(context)
             if not context.files and not context.diff_text.strip():
                 _fail("nothing to review: the diff is empty")
@@ -120,8 +137,8 @@ def review(
         if json_path is not None:
             _write_json(json_path, result)
         typer.echo(render_report(result), nl=False)
-        if post and github is not None:
-            _post_review(github[0], context, result)
+        if post and target is not None:
+            _post_review(target.client, context, result)
     if fail_on is not None and gate_tripped(result.review.findings, fail_on):
         raise typer.Exit(EXIT_GATE)
 
@@ -142,8 +159,8 @@ def _check_credentials() -> None:
     telemetry.get_logger().info("credential_source", source=source)
 
 
-def _github_target(pr: int, repo: str | None) -> tuple[GitHubClient, str, str]:
-    """The client and owner/name for PR mode, or a clean failure before any query."""
+def _github_target(pr: int, repo: str | None) -> PRTarget:
+    """The client and pull request for PR mode, or a clean failure before any query."""
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not token:
         _fail("GITHUB_TOKEN is required for --pr")
@@ -155,7 +172,7 @@ def _github_target(pr: int, repo: str | None) -> tuple[GitHubClient, str, str]:
     except ValueError as exc:
         _fail(str(exc))
     telemetry.get_logger().info("pr_target", repo=slug, pr=pr)
-    return GitHubClient(token), owner, name
+    return PRTarget(GitHubClient(token), owner, name, pr)
 
 
 def _warn_on_head_mismatch(context: ReviewContext) -> None:

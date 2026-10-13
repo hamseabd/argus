@@ -12,10 +12,9 @@ from dataclasses import dataclass, field
 
 from claude_agent_sdk import AssistantMessage, ToolUseBlock
 
-from argus.agent.hooks import LEAD_AGENT, AgentCounters, HookState
+from argus.agent.hooks import AGENT_TOOL, LEAD_AGENT, AgentCounters, HookState
 from argus.domain.models import AgentMetrics
 
-AGENT_TOOL = "Agent"
 _UNKNOWN_AGENT = "agent"
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 """The model picks the subagent name and it ends up in a public review; keep it plain."""

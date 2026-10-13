@@ -12,10 +12,9 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from argus.context.diff import DIFF_SIZE_CAP
+from argus.telemetry import LogFormat, LogLevel
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
-LogFormat = Literal["auto", "json", "console"]
-LogLevel = Literal["debug", "info", "warning"]
 
 DEFAULT_ANSWER_HOLDS = 3
 """Times the lead's answer may be held in one query before it goes through regardless."""
