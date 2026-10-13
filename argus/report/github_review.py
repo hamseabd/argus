@@ -106,17 +106,17 @@ def known_findings_from(
     known: list[KnownFinding] = []
     for review in argus_reviews:
         for comment in by_review[review.get("id")]:
-            match = _INLINE_TITLE.match(str(comment.get("body") or ""))
-            if match is None:
+            header = inline_header(str(comment.get("body") or ""))
+            if header is None:
                 continue
             line = comment.get("line") or comment.get("original_line")
             known.append(
                 KnownFinding(
                     file=str(comment.get("path") or ""),
                     line=int(line) if line else None,
-                    title=match["title"],
-                    severity=_severity(match["severity"]),
-                    category=_category(match["category"]),
+                    title=header["title"],
+                    severity=_severity(header["severity"]),
+                    category=_category(header["category"]),
                     url=str(comment.get("html_url") or ""),
                 )
             )

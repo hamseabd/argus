@@ -278,9 +278,16 @@ def test_the_repository_s_review_rules_reach_the_lead_fenced_and_attributed() ->
     text = lead_user_prompt(context().model_copy(update={"review_rules": rules}))
 
     assert "## Review rules for this repository" in text
-    assert "base branch" in text
+    assert "the change cannot touch" in text
     assert "```\n" + rules in text
 
 
 def test_without_rules_the_lead_prompt_has_no_rules_section() -> None:
     assert "Review rules" not in lead_user_prompt(context())
+
+
+def test_the_verifier_is_told_a_rejection_stays_visible() -> None:
+    text = load_prompt("verifier")
+
+    assert "dropped from the review" not in text
+    assert "still shown" in text

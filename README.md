@@ -246,8 +246,8 @@ Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` en
 
 ### Review rules
 
-A `REVIEW.md` at the root of the base branch is the maintainers' brief to the reviewer: what a defect is in this codebase and what is deliberate, such as "money is integer cents" or "the ORM escapes every query".
-Argus reads it from the base branch, never from the change under review, so a pull request that edits or adds `REVIEW.md` cannot tell the reviewer to look away from itself.
+A `REVIEW.md` at the repository root is the maintainers' brief to the reviewer: what a defect is in this codebase and what is deliberate, such as "money is integer cents" or "the ORM escapes every query".
+Argus never reads it from the change under review: for a pull request it comes from the default branch, not the pull request's base, which its author picks from any branch they can push to; locally, from `--base`. So a pull request that edits or adds `REVIEW.md` cannot tell the reviewer to look away from itself, and a failure reading it means no rules, never a failed review.
 The lead gets it in its prompt, and the specialists and the verifier in theirs, fenced and labelled: the rules shape what counts as a finding and how much it matters, and cannot change the tools, the process, or the shape of an answer.
 It is cut at 8,000 characters, so it cannot crowd out the diff.
 
