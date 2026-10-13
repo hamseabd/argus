@@ -8,7 +8,9 @@ Findings are frozen: a status change produces a new Finding via
 with_status(), so a stage can never mutate another stage's output.
 """
 
+import re
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -16,10 +18,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Severity = Literal["critical", "high", "medium", "low"]
 Category = Literal["correctness", "security", "quality"]
-Status = Literal["pending", "confirmed", "rejected", "unverified"]
+Status = Literal["pending", "confirmed", "rejected", "unverified", "known"]
+"""known: an earlier Argus review on the same pull request already reported it."""
 
 SEVERITY_ORDER: dict[str, int] = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 _STATUS_ORDER: dict[str, int] = {"confirmed": 0, "unverified": 1, "pending": 2}
+HIDDEN_STATUSES: frozenset[str] = frozenset({"rejected", "known"})
+"""Statuses a report counts but never shows: refuted, or already on the pull request."""
+KNOWN_LINE_TOLERANCE = 2
+"""How far a finding may sit from an earlier one on the same file and still be the same claim."""
 
 MAX_FINDINGS = 25
 MAX_TITLE_LENGTH = 100
@@ -60,6 +67,52 @@ class Finding(_Model):
         if self.end_line is not None and self.end_line != self.line:
             return f"{self.file}:{self.line}-{self.end_line}"
         return f"{self.file}:{self.line}"
+
+
+class KnownFinding(_Model):
+    """A finding an earlier Argus review already posted on the pull request."""
+
+    file: str
+    line: int | None = Field(
+        default=None, description="None when the comment sat in the review body or has no line."
+    )
+    title: str
+    severity: Severity | None = Field(default=None, description="As posted; None if unreadable.")
+    category: Category | None = Field(default=None, description="As posted; None if unreadable.")
+    url: str = Field(description="Where it was posted, so a skipped finding can be found.")
+
+
+def matches_known(finding: "Finding", known: Sequence["KnownFinding"]) -> "KnownFinding | None":
+    """The earlier finding this one repeats, or None.
+
+    Same file and the same title, however spaced, cased, or punctuated, is the
+    same claim even when the code has moved. Same file within a couple of lines
+    is the same claim only when the kind and the weight agree too: a reworded
+    title for the same category and severity, never a low nit nearby swallowing
+    a new critical finding.
+    """
+    title = _normalized(finding.title)
+    for earlier in known:
+        if earlier.file != finding.file:
+            continue
+        if _normalized(earlier.title) == title:
+            return earlier
+        if (
+            earlier.line is not None
+            and abs(earlier.line - finding.line) <= KNOWN_LINE_TOLERANCE
+            and earlier.severity == finding.severity
+            and earlier.category == finding.category
+        ):
+            return earlier
+    return None
+
+
+_PUNCTUATION = re.compile(r"[^\w\s]")
+
+
+def _normalized(title: str) -> str:
+    """Lowercase, punctuation anywhere dropped, whitespace collapsed."""
+    return " ".join(_PUNCTUATION.sub(" ", title.lower()).split())
 
 
 class Review(_Model):
@@ -204,10 +257,11 @@ class ReviewContext(_Model):
 def rank_findings(findings: list[Finding]) -> list[Finding]:
     """Order findings for the report and drop the rejected ones.
 
-    Confirmed findings come before unverified ones, then by severity from
-    critical to low, then by file path and line so the order is stable.
+    Rejected and known findings are dropped. Confirmed findings come before
+    unverified ones, then by severity from critical to low, then by file path
+    and line so the order is stable.
     """
-    kept = [f for f in findings if f.status != "rejected"]
+    kept = [f for f in findings if f.status not in HIDDEN_STATUSES]
     return sorted(
         kept,
         key=lambda f: (_STATUS_ORDER[f.status], SEVERITY_ORDER[f.severity], f.file, f.line),

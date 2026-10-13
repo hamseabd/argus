@@ -1,8 +1,9 @@
 """GitHub REST client for pull request context and for posting the review.
 
-Four calls, all against the pulls API: metadata, the unified diff, the
-changed-file list, and the review itself. Every non-2xx response and every
-transport failure becomes a GitHubError carrying the status and body.
+Six calls, all against the pulls API: metadata, the unified diff, the
+changed-file list, the reviews and inline comments already posted, and the
+review itself. Every non-2xx response and every transport failure becomes a
+GitHubError carrying the status and body.
 """
 
 import re
@@ -66,15 +67,26 @@ class GitHubClient:
         return self._request("GET", _pull(owner, repo, number), accept=DIFF_MEDIA_TYPE).text
 
     def pr_files(self, owner: str, repo: str, number: int) -> list[ChangedFile]:
-        files: list[ChangedFile] = []
-        url: str | None = f"{_pull(owner, repo, number)}/files"
+        items = self._paginate(f"{_pull(owner, repo, number)}/files")
+        return [_changed_file(item) for item in items]
+
+    def pr_reviews(self, owner: str, repo: str, number: int) -> list[dict[str, Any]]:
+        """Every review on the pull request, oldest first, as the API returns them."""
+        return self._paginate(f"{_pull(owner, repo, number)}/reviews")
+
+    def pr_review_comments(self, owner: str, repo: str, number: int) -> list[dict[str, Any]]:
+        """Every inline review comment on the pull request, as the API returns them."""
+        return self._paginate(f"{_pull(owner, repo, number)}/comments")
+
+    def _paginate(self, url: str | None) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
         params: dict[str, Any] | None = {"per_page": _PAGE_SIZE}
         while url:
             response = self._request("GET", url, params=params)
-            files.extend(_changed_file(item) for item in response.json())
+            items.extend(response.json())
             url = response.links.get("next", {}).get("url")
             params = None  # the next link carries its own query string
-        return files
+        return items
 
     def post_review(self, owner: str, repo: str, number: int, payload: dict[str, Any]) -> str:
         response = self._request("POST", f"{_pull(owner, repo, number)}/reviews", json=payload)

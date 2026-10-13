@@ -186,3 +186,12 @@ def test_report_counts_do_not_mention_absent_categories() -> None:
 
     assert "1 finding: 1 confirmed." in text
     assert "rejected" not in text
+
+
+def test_counts_say_how_many_findings_were_already_reported_and_hidden() -> None:
+    text = render_report(
+        result([finding(), finding().model_copy(update={"id": "security-2", "status": "known"})])
+    )
+
+    assert "1 finding: 1 confirmed, 1 already reported on this pull request and not shown." in text
+    assert "security-2" not in text
