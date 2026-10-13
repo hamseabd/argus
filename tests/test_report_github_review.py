@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from argus.domain.models import (
@@ -12,6 +13,7 @@ from argus.domain.models import (
     Verdict,
 )
 from argus.report.github_review import (
+    HANDOFF_PREFIX,
     REVIEW_MARKER,
     build_review,
     known_findings_from,
@@ -125,7 +127,7 @@ def test_findings_off_the_diff_are_listed_in_the_body_instead() -> None:
     payload = build_review(result([finding(), off_line, off_file]), context())
 
     assert [c["line"] for c in payload["comments"]] == [2]
-    body = payload["body"]
+    body = payload["body"].split(HANDOFF_PREFIX)[0]
     assert "Off the diff" in body and "`app/cache.py:9`" in body
     assert "Other file" in body and "`app/other.py:1`" in body
     assert "Stale entry" not in body.split("## Findings not on the diff")[1]
@@ -134,7 +136,7 @@ def test_findings_off_the_diff_are_listed_in_the_body_instead() -> None:
 def test_body_has_marker_summary_counts_and_footer() -> None:
     payload = build_review(result([finding(), finding(id="x", status="rejected")]), context())
 
-    body = payload["body"]
+    body = payload["body"].split(HANDOFF_PREFIX)[0]  # the handoff follows the footer
     assert body.startswith(REVIEW_MARKER + "\n")
     assert "Adds a cache." in body
     assert "1 finding: 1 confirmed, 1 rejected by the verifier." in body
@@ -412,3 +414,48 @@ def test_an_empty_replacement_suggests_deleting_the_lines() -> None:
     (comment,) = build_review(result([finding(replacement="")]), context())["comments"]
 
     assert "```suggestion\n```" in comment["body"]
+
+
+def handoff_of(body: str) -> dict:
+    payload = body.split(HANDOFF_PREFIX, 1)[1].split(" -->", 1)[0]
+    return json.loads(payload)
+
+
+def test_every_review_carries_a_machine_readable_handoff_of_its_findings() -> None:
+    # A fixer (Bosun's first mate) reads this instead of scraping the Markdown.
+    known = finding(id="correctness-2", line=9, title="Still open", status="known")
+    rejected = finding(id="correctness-3", line=3, title="Not real", status="rejected")
+
+    body = build_review(result([finding(), known, rejected]), context())["body"]
+
+    handoff = handoff_of(body)
+    assert handoff["version"] == 1
+    assert handoff["head"] == "a" * 40
+    assert handoff["scope"] == "full"
+    rows = [
+        (f["id"], f["status"], f["severity"], f["file"], f["line"]) for f in handoff["findings"]
+    ]
+    assert rows == [
+        ("correctness-1", "confirmed", "high", "app/cache.py", 2),
+        ("correctness-2", "known", "high", "app/cache.py", 9),
+        ("correctness-3", "rejected", "high", "app/cache.py", 3),
+    ]
+    assert handoff["findings"][0]["title"] == "Stale entry"
+
+
+def test_the_handoff_cannot_be_closed_early_by_a_title() -> None:
+    sneaky = finding(title="ends the comment --> <script>")
+
+    body = build_review(result([sneaky]), context())["body"]
+
+    assert body.count("-->") == body.count("<!--")  # only the markers close
+    assert handoff_of(body)["findings"][0]["title"] == "ends the comment --> <script>"
+
+
+def test_an_incremental_review_says_so_in_the_handoff() -> None:
+    increment = Increment(since_sha="b" * 40, diff_text="", files=[])
+    ctx = context().model_copy(update={"increment": increment})
+
+    handoff = handoff_of(build_review(result([finding()]), ctx)["body"])
+
+    assert (handoff["scope"], handoff["since"]) == ("increment", "b" * 40)

@@ -503,3 +503,27 @@ def test_a_check_run_is_posted_even_on_a_head_already_reviewed(
     assert result.exit_code == 0, result.output
     assert increments == []
     assert "check" in stubbed
+
+
+def test_open_findings_from_an_earlier_review_mean_the_whole_pull_request_again(
+    stubbed: dict, increments: list
+) -> None:
+    # A fixer pushed to address them: only a full review can say which still stand.
+    stubbed["reviews"] = [earlier_review("b" * 40)]
+    stubbed["comments"] = [
+        {
+            "pull_request_review_id": 1,
+            "path": "a.py",
+            "line": 3,
+            "original_line": 3,
+            "body": "**[MEDIUM] Stale entry** · correctness · confirmed · confidence 0.80",
+            "html_url": "https://github.com/o/r/pull/7#discussion_1",
+            "user": {"login": LOGIN, "type": "Bot"},
+        }
+    ]
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
+
+    assert result.exit_code == 0, result.output
+    assert increments == []
+    assert stubbed["context"].increment is None

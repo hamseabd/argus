@@ -200,7 +200,9 @@ def review(
                     # A gated run reviews everything: an increment would never re-find
                     # an open finding from an earlier push, and the gate would pass.
                     # --check too: a required check must be posted on every head.
-                    if not full and fail_on is None and not check:
+                    # And when earlier findings are still open: a fixer pushed to address
+                    # them, and only the whole pull request shows which still stand.
+                    if not full and fail_on is None and not check and not known:
                         context = _narrow_to_increment(context, reviews, settings, patterns)
             if rules:
                 telemetry.get_logger().info("review_rules", chars=len(rules))

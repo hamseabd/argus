@@ -14,6 +14,7 @@ type, is not enough, and neither is being some bot: every GitHub App installed
 on the repository is one.
 """
 
+import json
 import re
 from collections.abc import Iterable
 from typing import Any
@@ -41,6 +42,9 @@ from argus.report.markdown import (
 )
 
 REVIEW_MARKER = "<!-- argus:review -->"
+HANDOFF_PREFIX = "<!-- argus:handoff "
+"""Opens the machine-readable handoff: a JSON object, then " -->", at the end of every body."""
+HANDOFF_VERSION = 1
 REVIEW_EVENT = "COMMENT"
 _SEVERITIES = "|".join(s.upper() for s in SEVERITY_ORDER)
 _INLINE_TITLE = re.compile(
@@ -76,7 +80,9 @@ def build_review(result: ReviewResult, context: ReviewContext) -> dict[str, Any]
         "event": REVIEW_EVENT,
         "body": _body(
             result, in_body, context.ignored_files, context.increment, rate=bool(comments)
-        ),
+        )
+        + handoff(result, context)
+        + "\n",
         "comments": comments,
     }
 
@@ -156,6 +162,45 @@ def inline_header(body: str) -> dict[str, str] | None:
         "category": match["category"],
         "status": match["status"] or "",
     }
+
+
+def handoff(result: ReviewResult, context: ReviewContext) -> str:
+    """The review's findings as JSON in an HTML comment, for an agent that fixes them.
+
+    The Markdown is for people and changes with the report; this is the
+    contract a fixer reads instead (Bosun's first mate does). Every finding is
+    listed with its status: confirmed, unverified, and known are still open on
+    this head, rejected is not. `scope` says whether the whole pull request was
+    reviewed or only the commits since `since`.
+
+    `<` and `>` are written as JSON escapes, so no title can close the comment.
+    """
+    if context.pr is None:
+        raise ValueError("a handoff needs a pull request context")
+    increment = context.increment
+    payload: dict[str, Any] = {
+        "version": HANDOFF_VERSION,
+        "head": context.pr.head_sha,
+        "scope": "full" if increment is None else "increment",
+        "findings": [
+            {
+                "id": f.id,
+                "status": f.status,
+                "severity": f.severity,
+                "category": f.category,
+                "file": f.file,
+                "line": f.line,
+                "end_line": f.end_line,
+                "title": f.title,
+            }
+            for f in result.review.findings
+        ],
+    }
+    if increment is not None:
+        payload["since"] = increment.since_sha
+    text = json.dumps(payload, separators=(",", ":"))
+    text = text.replace("<", "\\u003c").replace(">", "\\u003e")
+    return f"\n{HANDOFF_PREFIX}{text} -->"
 
 
 def _is_argus_review(review: dict[str, Any], reviewer_login: str) -> bool:
