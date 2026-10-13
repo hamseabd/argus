@@ -508,6 +508,30 @@ def test_a_check_run_is_posted_even_on_a_head_already_reviewed(
     assert "check" in stubbed
 
 
+def test_open_findings_from_an_earlier_review_mean_the_whole_pull_request_again(
+    stubbed: dict, increments: list
+) -> None:
+    # A fixer pushed to address them: only a full review can say which still stand.
+    stubbed["reviews"] = [earlier_review("b" * 40)]
+    stubbed["comments"] = [
+        {
+            "pull_request_review_id": 1,
+            "path": "a.py",
+            "line": 3,
+            "original_line": 3,
+            "body": "**[MEDIUM] Stale entry** · correctness · confirmed · confidence 0.80",
+            "html_url": "https://github.com/o/r/pull/7#discussion_1",
+            "user": {"login": LOGIN, "type": "Bot"},
+        }
+    ]
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
+
+    assert result.exit_code == 0, result.output
+    assert increments == []
+    assert stubbed["context"].increment is None
+
+
 def test_the_check_run_is_posted_even_when_posting_the_review_fails(stubbed: dict) -> None:
     # A required check must never be left missing because the review post failed.
     stubbed["post_outcome"] = GitHubError(422, "Unprocessable Entity")
@@ -554,3 +578,34 @@ def test_without_an_identity_the_log_names_both_things_skipped() -> None:
     event = json.loads(stream.getvalue().splitlines()[-1])
     assert event["event"] == "earlier_reviews_skipped"
     assert event["skips"] == ["known_findings", "incremental_review"]
+
+
+def test_once_the_latest_review_is_clean_re_reviews_are_incremental_again(
+    stubbed: dict, increments: list
+) -> None:
+    # A finding posted long ago stays on the PR; it must not force full reviews forever.
+    stubbed["reviews"] = [
+        earlier_review("c" * 40) | {"id": 1},
+        earlier_review("b" * 40)
+        | {
+            "id": 2,
+            "body": '<!-- argus:review -->\n\nClean.\n<!-- argus:handoff {"version":1,'
+            '"head":"' + "b" * 40 + '","scope":"full","findings":[]} -->',
+        },
+    ]
+    stubbed["comments"] = [
+        {
+            "pull_request_review_id": 1,
+            "path": "a.py",
+            "line": 3,
+            "original_line": 3,
+            "body": "**[MEDIUM] Stale entry** · correctness · confirmed · confidence 0.80",
+            "html_url": "https://github.com/o/r/pull/7#discussion_1",
+            "user": {"login": LOGIN, "type": "Bot"},
+        }
+    ]
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
+
+    assert result.exit_code == 0, result.output
+    assert increments == [("b" * 40, "a" * 40)]

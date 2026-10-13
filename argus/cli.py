@@ -27,7 +27,12 @@ from argus.domain.models import (
 from argus.pipeline import run_review
 from argus.report.check_run import build_check_run
 from argus.report.feedback import collect_feedback, render_feedback, summarize_feedback
-from argus.report.github_review import build_review, known_findings_from, last_reviewed_head
+from argus.report.github_review import (
+    build_review,
+    known_findings_from,
+    last_review_left_open,
+    last_reviewed_head,
+)
 from argus.report.markdown import render_report
 from argus.report.summary import render_summary
 from argus.settings import Settings
@@ -191,12 +196,17 @@ def review(
                 _warn_on_head_mismatch(context)
                 rules = rules_from_github(target.client, target.owner, target.repo)
                 if not include_known:
-                    reviews = _earlier_reviews(target, settings.reviewer_login)
-                    known = _known_findings(target, settings.reviewer_login, reviews)
+                    login = settings.reviewer_login
+                    reviews = _earlier_reviews(target, login)
+                    posted = _earlier_comments(target, login)
+                    known = _known_findings(login, reviews, posted)
+                    still_open = last_review_left_open(reviews, posted, login)
                     # A gated run reviews everything: an increment would never re-find
                     # an open finding from an earlier push, and the gate would pass.
                     # --check too: a required check must be posted on every head.
-                    if not full and fail_on is None and not check:
+                    # And while the latest review left findings open: a fixer pushed to
+                    # address them, and only the whole pull request shows which still stand.
+                    if not full and fail_on is None and not check and not still_open:
                         context = _narrow_to_increment(context, reviews, settings, patterns)
             if rules:
                 telemetry.get_logger().info("review_rules", chars=len(rules))
@@ -313,8 +323,15 @@ def _earlier_reviews(target: PRTarget, reviewer_login: str) -> list[dict[str, An
     return target.client.pr_reviews(target.owner, target.repo, target.number)
 
 
+def _earlier_comments(target: PRTarget, reviewer_login: str) -> list[dict[str, Any]]:
+    """The pull request's inline review comments, fetched only with an identity to trust."""
+    if not reviewer_login:
+        return []
+    return target.client.pr_review_comments(target.owner, target.repo, target.number)
+
+
 def _known_findings(
-    target: PRTarget, reviewer_login: str, reviews: list[dict[str, Any]]
+    reviewer_login: str, reviews: list[dict[str, Any]], comments: list[dict[str, Any]]
 ) -> list[KnownFinding]:
     """What earlier Argus reviews already posted on the pull request.
 
@@ -323,11 +340,7 @@ def _known_findings(
     """
     if not reviewer_login:
         return []
-    known = known_findings_from(
-        reviews,
-        target.client.pr_review_comments(target.owner, target.repo, target.number),
-        reviewer_login,
-    )
+    known = known_findings_from(reviews, comments, reviewer_login)
     telemetry.get_logger().info("known_findings", count=len(known), reviewer=reviewer_login)
     return known
 

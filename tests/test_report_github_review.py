@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from argus.domain.models import (
@@ -12,9 +13,12 @@ from argus.domain.models import (
     Verdict,
 )
 from argus.report.github_review import (
+    HANDOFF_PREFIX,
+    MAX_BODY_CHARS,
     REVIEW_MARKER,
     build_review,
     known_findings_from,
+    last_review_left_open,
     last_reviewed_head,
 )
 
@@ -125,7 +129,7 @@ def test_findings_off_the_diff_are_listed_in_the_body_instead() -> None:
     payload = build_review(result([finding(), off_line, off_file]), context())
 
     assert [c["line"] for c in payload["comments"]] == [2]
-    body = payload["body"]
+    body = payload["body"].split(HANDOFF_PREFIX)[0]
     assert "Off the diff" in body and "`app/cache.py:9`" in body
     assert "Other file" in body and "`app/other.py:1`" in body
     assert "Stale entry" not in body.split("## Findings not on the diff")[1]
@@ -134,7 +138,7 @@ def test_findings_off_the_diff_are_listed_in_the_body_instead() -> None:
 def test_body_has_marker_summary_counts_and_footer() -> None:
     payload = build_review(result([finding(), finding(id="x", status="rejected")]), context())
 
-    body = payload["body"]
+    body = payload["body"].split(HANDOFF_PREFIX)[0]  # the handoff follows the footer
     assert body.startswith(REVIEW_MARKER + "\n")
     assert "Adds a cache." in body
     assert "1 finding: 1 confirmed, 1 rejected by the verifier." in body
@@ -414,6 +418,51 @@ def test_an_empty_replacement_suggests_deleting_the_lines() -> None:
     assert "```suggestion\n```" in comment["body"]
 
 
+def handoff_of(body: str) -> dict:
+    payload = body.split(HANDOFF_PREFIX, 1)[1].split(" -->", 1)[0]
+    return json.loads(payload)
+
+
+def test_every_review_carries_a_machine_readable_handoff_of_its_findings() -> None:
+    # A fixer (Bosun's first mate) reads this instead of scraping the Markdown.
+    known = finding(id="correctness-2", line=9, title="Still open", status="known")
+    rejected = finding(id="correctness-3", line=3, title="Not real", status="rejected")
+
+    body = build_review(result([finding(), known, rejected]), context())["body"]
+
+    handoff = handoff_of(body)
+    assert handoff["version"] == 1
+    assert handoff["head"] == "a" * 40
+    assert handoff["scope"] == "full"
+    rows = [
+        (f["id"], f["status"], f["severity"], f["file"], f["line"]) for f in handoff["findings"]
+    ]
+    assert rows == [
+        ("correctness-1", "confirmed", "high", "app/cache.py", 2),
+        ("correctness-2", "known", "high", "app/cache.py", 9),
+        ("correctness-3", "rejected", "high", "app/cache.py", 3),
+    ]
+    assert handoff["findings"][0]["title"] == "Stale entry"
+
+
+def test_the_handoff_cannot_be_closed_early_by_a_title() -> None:
+    sneaky = finding(title="ends the comment --> <script>")
+
+    body = build_review(result([sneaky]), context())["body"]
+
+    assert body.count("-->") == body.count("<!--")  # only the markers close
+    assert handoff_of(body)["findings"][0]["title"] == "ends the comment --> <script>"
+
+
+def test_an_incremental_review_says_so_in_the_handoff() -> None:
+    increment = Increment(since_sha="b" * 40, diff_text="", files=[])
+    ctx = context().model_copy(update={"increment": increment})
+
+    handoff = handoff_of(build_review(result([finding()]), ctx)["body"])
+
+    assert (handoff["scope"], handoff["since"]) == ("increment", "b" * 40)
+
+
 def test_an_inline_finding_posted_without_a_status_is_still_known() -> None:
     review = {
         "id": 1,
@@ -465,3 +514,64 @@ def test_a_finding_listed_in_the_body_shows_its_replacement() -> None:
 
     assert "**Replacement for line 9:**" in body
     assert "return None" in body
+
+
+def handed_off(review_id: int, commit: str, *statuses: str) -> dict:
+    """An Argus review whose body carries a handoff listing findings with these statuses."""
+    ctx = context().model_copy(
+        update={"pr": context().pr.model_copy(update={"head_sha": commit})}  # type: ignore[union-attr]
+    )
+    findings = [finding(id=f"correctness-{i}", status=s) for i, s in enumerate(statuses, 1)]
+    return argus_review(review_id, commit) | {"body": build_review(result(findings), ctx)["body"]}
+
+
+def test_findings_are_open_while_the_latest_review_hands_off_an_open_one() -> None:
+    assert last_review_left_open([handed_off(1, "a" * 40, "known")], [], "argus[bot]")
+    assert last_review_left_open([handed_off(1, "a" * 40, "unverified")], [], "argus[bot]")
+
+
+def test_a_clean_latest_review_closes_what_earlier_ones_posted() -> None:
+    # Old reviews and their comments stay on the PR forever; only the latest counts.
+    reviews = [handed_off(1, "a" * 40, "confirmed"), handed_off(2, "b" * 40, "rejected")]
+    comments = [
+        {
+            "pull_request_review_id": 1,
+            "path": "app/cache.py",
+            "line": 2,
+            "body": "**[HIGH] Stale entry** · correctness · confirmed · confidence 0.80",
+            "user": {"login": "argus[bot]", "type": "Bot"},
+            "html_url": "c",
+        }
+    ]
+
+    assert not last_review_left_open(reviews, comments, "argus[bot]")
+
+
+def test_a_latest_review_from_before_the_handoff_is_judged_by_what_it_posted() -> None:
+    old = argus_review(1, "a" * 40)
+    comment = {
+        "pull_request_review_id": 1,
+        "path": "a.py",
+        "line": 3,
+        "body": "**[HIGH] Leak** · correctness · confirmed · confidence 0.80",
+        "user": {"login": "argus[bot]", "type": "Bot"},
+        "html_url": "c",
+    }
+
+    assert last_review_left_open([old], [comment], "argus[bot]")
+    assert not last_review_left_open([old], [], "argus[bot]")
+    assert not last_review_left_open([], [comment], "argus[bot]")
+
+
+def test_an_oversized_review_is_cut_to_fit_and_keeps_its_handoff_whole() -> None:
+    long = "x" * 5000
+    off_diff = [
+        finding(id=f"correctness-{i}", line=50 + i, description=long, evidence=long)
+        for i in range(1, 15)
+    ]
+
+    body = build_review(result(off_diff), context())["body"]
+
+    assert len(body) <= MAX_BODY_CHARS
+    assert "cut here to fit GitHub's limit" in body
+    assert len(handoff_of(body)["findings"]) == 14

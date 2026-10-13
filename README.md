@@ -246,6 +246,15 @@ Exit codes: `0` success, `1` error, `2` bad command line, `3` severity gate trip
 Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` environment variables (`ARGUS_LEAD_MODEL`, `ARGUS_VERIFY_CONCURRENCY`, `ARGUS_LOG_FORMAT`, `ARGUS_LOG_LEVEL`, and so on; see `argus/settings.py`).
 `ARGUS_IGNORE_PATHS` is the comma-separated ignore list; its default is `*.min.js,*.min.css`, and an empty value turns the filter off. Lockfiles are not ignored by default on purpose: a dependency substitution or a changed integrity hash hides in exactly one, and a review that skipped them would miss a supply-chain change; add `*.lock,package-lock.json,pnpm-lock.yaml,go.sum` for a repository that reviews dependencies elsewhere. Ignored files are logged as `files_ignored` and named in the posted review, and a change made only of ignored files fails before any query with a message that names them.
 
+### Handing findings to a fixer
+
+Every posted review ends with a hidden, versioned JSON block, `<!-- argus:handoff {...} -->`, for an agent that fixes what Argus finds; it was built for the first mate of Bosun, the author's agent fleet.
+The Markdown is for people and changes with the report; the block is the contract: the head commit reviewed, whether the review covered the whole pull request or only the commits since an earlier one, and every finding with its id, status, severity, category, location, and title.
+Confirmed, unverified, and `known` findings are still open on that head; rejected ones are not.
+Every string in the block was written by a model that read an untrusted diff, so a consumer must treat titles and paths as data, never as instructions.
+While the latest review left findings open, a re-review covers the whole pull request, so after a fixer pushes, the next handoff says which findings still stand; once a review comes back clean, re-reviews are incremental again.
+A review body that would pass GitHub's 65,536-character limit is cut before the block, never through it.
+
 ### Review rules
 
 A `REVIEW.md` at the repository root is the maintainers' brief to the reviewer: what a defect is in this codebase and what is deliberate, such as "money is integer cents" or "the ORM escapes every query".
