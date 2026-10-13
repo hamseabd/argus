@@ -82,12 +82,21 @@ def verifier_options(
     )
 
 
+UNNEEDED_CREDENTIALS: tuple[str, ...] = (
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "LANGSMITH_API_KEY",
+    "ARGUS_APP_PRIVATE_KEY",
+)
+"""Credentials the review step may hold that the CLI never uses; blanked in its environment."""
+
+
 def _common(context: ReviewContext, state: HookState) -> dict[str, Any]:
     return {
         "cwd": context.repo_root,
         "permission_mode": "dontAsk",
         "disallowed_tools": sorted(DENIED_TOOLS),
-        "hooks": build_hooks(state),
+        "hooks": build_hooks(state, context.repo_root),
         "mcp_servers": {SERVER_NAME: build_argus_server(context.repo_root)},
         "strict_mcp_config": True,
         "setting_sources": [],
@@ -105,7 +114,12 @@ def _common(context: ReviewContext, state: HookState) -> dict[str, Any]:
         # With background tasks off, the lead's Agent calls return with the
         # findings; calls made in one message still run concurrently. Argus has
         # no other background work (Bash and Monitor are not in its tool set).
+        #
+        # The CLI inherits the parent's environment. It runs on the Claude token
+        # and needs nothing else, so every other credential the review step holds
+        # is blanked: what the process does not have, no read can leak.
         "env": {
+            **{name: "" for name in UNNEEDED_CREDENTIALS},
             "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
             "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
             "OTEL_EXPORTER_OTLP_HEADERS": "",

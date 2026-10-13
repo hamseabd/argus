@@ -124,3 +124,15 @@ def test_specialists_run_in_the_foreground(tmp_path: Path) -> None:
         verifier_options(settings(), ctx, HookState()),
     ):
         assert options.env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+
+def test_credentials_the_cli_never_needs_are_blanked_in_its_environment(tmp_path: Path) -> None:
+    # The CLI process inherits the parent's environment; a read of
+    # /proc/self/environ is refused by a hook, and these are not there to find.
+    for options in (
+        lead_options(settings(), context(tmp_path), HookState()),
+        verifier_options(settings(), context(tmp_path), HookState()),
+    ):
+        for name in ("GITHUB_TOKEN", "GH_TOKEN", "LANGSMITH_API_KEY", "ARGUS_APP_PRIVATE_KEY"):
+            assert options.env[name] == ""
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in options.env  # the CLI runs on it

@@ -14,9 +14,12 @@ When a TraceRecorder is attached, the same hooks feed it the start, end,
 and denial of every tool call.
 """
 
+import fnmatch
+import os
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from claude_agent_sdk import HookContext, HookMatcher
@@ -38,6 +41,12 @@ ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Agent", GIT_HISTORY_T
 READ_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", GIT_HISTORY_TOOL_NAME)
 """The tools that only look at code; the lead's reading budget governs these."""
 READ_TOOL_MATCHER = "|".join(sorted(READ_TOOLS))
+PATH_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob")
+"""The built-in tools that take a path; confine_reads keeps them inside the repository.
+
+git_history checks its own path, in argus.agent.tools.
+"""
+PATH_TOOL_MATCHER = "|".join(PATH_TOOLS)
 AGENT_TOOL = "Agent"
 """The tool the lead delegates with; its calls are what the ledger and the trace attribute to."""
 STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
@@ -121,6 +130,110 @@ def deny_mutating_tools(state: HookState) -> Hook:
         return _deny(state, data, reason)
 
     return hook
+
+
+def confine_reads(state: HookState, repo_root: Path) -> Hook:
+    """Refuse a read that would leave the repository under review or enter its .git.
+
+    The tool set is read-only, but a read is still an exfiltration path: a
+    prompt injection in the diff, the PR body, or a symlink the change adds
+    can ask for /proc/self/environ or the CLI's credentials, and what a
+    reviewer reads can be quoted in a finding that is posted on the pull
+    request. Paths are resolved with symlinks followed, so a link inside the
+    repository that points out of it is refused too. .git is refused because
+    a checkout can keep a token in its config.
+
+    A search reaches files by pattern, not by a path that can be resolved, so
+    the repository is scanned once for links that lead out of it or into .git,
+    and a Grep or Glob whose scope holds one is refused whatever its pattern.
+    """
+    root = repo_root.resolve()
+    links = escaping_links(root)
+
+    async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
+        name = data.get("tool_name", "")
+        if name not in PATH_TOOLS:
+            return {}
+        problem = _outside(root, name, data.get("tool_input") or {}, links)
+        if problem is None:
+            return {}
+        state.denied += 1
+        get_logger().warning(
+            "read_outside_repo", tool=name, input=summarize(data.get("tool_input"))
+        )
+        reason = (
+            f"{problem} is outside the repository under review. Argus reads only the "
+            "repository's own files, and never its .git directory."
+        )
+        return _deny(state, data, reason)
+
+    return hook
+
+
+def _outside(
+    root: Path, tool: str, tool_input: dict[str, Any], links: Sequence[Path] = ()
+) -> str | None:
+    """The offending path of a Read, Grep, or Glob call, or None when it stays inside root."""
+    if tool == "Read":
+        raw = tool_input.get("file_path")
+        if not raw:
+            return "a read with no file_path"
+        return None if _inside(root, str(raw)) else str(raw)
+    path = str(tool_input.get("path") or ".")
+    if not _inside(root, path):
+        return path
+    scope = (root / Path(path).expanduser()).resolve()
+    for link in links:
+        if (root / link).is_relative_to(scope):
+            return f"{path} (it holds {link.as_posix()}, a link that leads out of it)"
+    # A glob can climb out or into .git on its own, whatever path it starts from:
+    # Glob's pattern and Grep's glob filter are checked as patterns.
+    pattern_key = "pattern" if tool == "Glob" else "glob"
+    pattern = str(tool_input.get(pattern_key) or "")
+    if pattern and _escaping_pattern(pattern):
+        return pattern
+    return None
+
+
+def escaping_links(root: Path) -> list[Path]:
+    """Symlinks in the repository that resolve outside it or into its .git, relative to root."""
+    found: list[Path] = []
+    for directory, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for name in [*dirnames, *filenames]:
+            entry = Path(directory) / name
+            if entry.is_symlink() and not _inside(root, str(entry)):
+                found.append(entry.relative_to(root))
+    return found
+
+
+def _escaping_pattern(pattern: str) -> bool:
+    """A pattern that can leave the repository or enter its .git on its own.
+
+    Absolute, home, and brace patterns are refused outright (`{..,x}` expands
+    to a parent the literal parts cannot show), and so is any part that is
+    `..` or that could match `.git`, such as `.gi?` or `[.]git`. A bare `*` or
+    `**` is allowed: the search tools skip hidden directories, and the
+    checkout keeps no credential in .git.
+    """
+    if pattern.startswith(("/", "~")) or "{" in pattern:
+        return True
+    parts = pattern.replace("\\", "/").split("/")
+    return any(
+        part == ".." or (part not in ("*", "**") and fnmatch.fnmatchcase(".git", part))
+        for part in parts
+    )
+
+
+def _inside(root: Path, raw: str) -> bool:
+    try:
+        path = Path(raw).expanduser()
+        resolved = (path if path.is_absolute() else root / path).resolve()
+    except (RuntimeError, OSError):  # an unknown ~user, a symlink loop: refuse, never guess
+        return False
+    if not resolved.is_relative_to(root):
+        return False
+    return ".git" not in resolved.relative_to(root).parts
 
 
 def await_specialists(state: HookState) -> Hook:
@@ -299,12 +412,13 @@ def on_subagent_stop(state: HookState) -> Hook:
     return hook
 
 
-def build_hooks(state: HookState) -> dict[HookEvent, list[HookMatcher]]:
+def build_hooks(state: HookState, repo_root: Path) -> dict[HookEvent, list[HookMatcher]]:
     return {
         "PreToolUse": [
             _matcher([deny_mutating_tools(state)], DENIED_TOOL_MATCHER),
             _matcher([limit_lead_reading(state)], READ_TOOL_MATCHER),
             _matcher([await_specialists(state)], STRUCTURED_OUTPUT_TOOL),
+            _matcher([confine_reads(state, repo_root)], PATH_TOOL_MATCHER),
             _matcher([observe_tool_start(state)]),
         ],
         "PostToolUse": [_matcher([audit_tool_call(state)])],

@@ -27,7 +27,7 @@ from argus.domain.models import (
     matches_known,
 )
 from argus.telemetry import bind_run, get_logger, new_run_id
-from argus.tracing import meta, record_error, span, stage_attributes
+from argus.tracing import meta, record_error, redact, scrub, span, stage_attributes
 
 DEFAULT_VERIFY_CONCURRENCY = 4
 PAID_ERRORS = (AgentRunError, ReviewProtocolError)
@@ -161,7 +161,7 @@ async def _run_review(
         rejected=sum(f.status == "rejected" for f in findings),
         known=sum(f.status == "known" for f in findings),
     )
-    return ReviewResult(
+    result = ReviewResult(
         review=review.model_copy(update={"findings": findings}),
         verdicts=verdicts,
         metrics=metrics,
@@ -170,6 +170,10 @@ async def _run_review(
         session_id=reviewed.session_id,
         config=config,
     )
+    # Everything downstream (the posted review, the job summary, the terminal,
+    # the JSON artifact) is built from this result, so it is scrubbed once here:
+    # a reviewer tricked into reading a credential would quote it as evidence.
+    return ReviewResult.model_validate(scrub(result.model_dump()))
 
 
 def _config_fields(config: RunConfig | None) -> dict[str, object]:
@@ -217,7 +221,7 @@ async def _verify_all(
                     record_error(stage, exc)
                     cost = float(exc.cost_usd) if isinstance(exc, PAID_ERRORS) else 0.0
                     get_logger().warning(
-                        "verify_failed", finding=finding.id, error=str(exc), cost_usd=cost
+                        "verify_failed", finding=finding.id, error=redact(str(exc)), cost_usd=cost
                     )
                     return VerifyFailure(cost)
                 stage.set_attributes(
