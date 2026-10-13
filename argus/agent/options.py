@@ -13,8 +13,13 @@ from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions
 
 from argus.agent.hooks import ALLOWED_TOOLS, DENIED_TOOLS, HookState, build_hooks
 from argus.agent.prompts import load_prompt
-from argus.agent.schemas import output_format, review_schema, verdict_schema
-from argus.agent.tools import GIT_HISTORY_TOOL_NAME, SERVER_NAME, build_argus_server
+from argus.agent.schemas import output_format, triage_schema, verdict_schema
+from argus.agent.tools import (
+    GIT_HISTORY_TOOL_NAME,
+    REPORT_FINDING_TOOL_NAME,
+    SERVER_NAME,
+    build_argus_server,
+)
 from argus.domain.models import ReviewContext
 from argus.settings import Settings
 from argus.telemetry import get_logger
@@ -35,7 +40,7 @@ def specialist_agents(settings: Settings) -> dict[str, AgentDefinition]:
         name: AgentDefinition(
             description=f"{name} specialist: {_SPECIALIST_FOCUS[name]}. Read-only.",
             prompt=load_prompt(name),
-            tools=[*_READ_TOOLS, GIT_HISTORY_TOOL_NAME],
+            tools=[*_READ_TOOLS, GIT_HISTORY_TOOL_NAME, REPORT_FINDING_TOOL_NAME],
             model=settings.specialist_model,
             effort=settings.specialist_effort,
             maxTurns=settings.specialist_max_turns,
@@ -61,7 +66,7 @@ def lead_options(
         tools=[*_READ_TOOLS, "Agent"],
         allowed_tools=list(ALLOWED_TOOLS),
         agents=specialist_agents(settings),
-        output_format=output_format(review_schema()),
+        output_format=output_format(triage_schema()),
         **_common(context, state),
     )
 
@@ -97,7 +102,9 @@ def _common(context: ReviewContext, state: HookState) -> dict[str, Any]:
         "permission_mode": "dontAsk",
         "disallowed_tools": sorted(DENIED_TOOLS),
         "hooks": build_hooks(state, context.repo_root),
-        "mcp_servers": {SERVER_NAME: build_argus_server(context.repo_root)},
+        # The review stage's state carries a collector, so its server also serves
+        # report_finding; the verifier's does not, so it can only read.
+        "mcp_servers": {SERVER_NAME: build_argus_server(context.repo_root, state.collector)},
         "strict_mcp_config": True,
         "setting_sources": [],
         "stderr": _cli_stderr,

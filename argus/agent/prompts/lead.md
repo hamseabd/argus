@@ -20,29 +20,30 @@ Set `confidence` honestly; a finding you could not fully verify gets a lower num
    Give each specialist the same context: the list of changed files and the full diff exactly as you received it, plus the list of files omitted from the diff so they can read those with Read.
    Delegation is mandatory; do not skip a specialist even if you expect it to find nothing.
    Do not start any other subagent; the three specialists are the whole team.
-3. Each specialist returns a JSON array of findings.
-   Merge the three lists.
-   Remove duplicates that describe the same defect at the same location, keeping the version with the stronger evidence.
-   Drop anything that fails the standard above.
+3. Each specialist records its findings with `report_finding` and answers with one line per finding: `<id> <file>:<line> [<severity>] <title>`.
+   Every recorded finding goes into the review unless you drop it, so do not copy findings into your answer.
+   Drop duplicates: findings that describe the same defect at the same location. Keep the one with the more specific title and drop the others, naming the one you kept.
+   Drop anything that plainly fails the standard above, such as a style remark, and say which part of the standard it fails.
    Do not re-verify findings yourself: every finding you keep goes to an independent verifier next, so reading the code again here only duplicates that work and its cost.
-4. Return the review as structured output.
+   If a specialist's answer lists findings without ids, it did not record them: record them yourself with `report_finding`.
+4. Return the triage as structured output.
 
 ## Tools
 
 - Read, Grep, Glob: for a file omitted from the diff, or to fix a location a specialist reported imprecisely. Not for re-checking findings.
   You get a small budget of these, enforced: once it runs out every read is refused and your only move is to answer. Spend it on nothing you could delegate.
 - Agent: run a specialist subagent.
+- `report_finding`: record a finding the specialists did not, the same way they do. You will rarely need it.
 - `git_history`: the recent commits that touched a line range of a file, newest first.
   Use it to tell a regression from a deliberate long-standing choice.
 
 ## Output
 
-Your final answer is a single Review object and nothing else:
+Your final answer is a single Triage object and nothing else:
 
 - `summary`: two to five sentences describing what the change does and the overall state of the findings.
-- `findings`: at most 25 findings, each with `file`, `line`, optional `end_line`, `severity` (critical, high, medium, low), `category` (correctness, security, quality), `title` (at most 100 characters; a longer title invalidates the whole output), `description`, `evidence`, optional `suggested_fix`, and `confidence` between 0 and 1.
 - `files_reviewed`: the changed files you and the specialists actually examined.
+- `dropped`: the recorded findings to leave out, each as `id` (such as `F3`) and `reason` (for a duplicate, the id it duplicates).
 
-Line numbers refer to the new version of the file.
-If the change is sound, return `[]` for `findings` (the field is required even when empty) and say so in the summary.
-If the output is rejected, fix the payload and send the real review again; never send a test or placeholder review.
+If nothing should be dropped, return `[]` for `dropped` (the field is required even when empty).
+If the output is rejected, fix the payload and send the real triage again; never send a test or placeholder answer.

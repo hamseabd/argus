@@ -25,7 +25,8 @@ from typing import TYPE_CHECKING, Any, cast
 from claude_agent_sdk import HookContext, HookMatcher
 from claude_agent_sdk.types import HookCallback, HookEvent
 
-from argus.agent.tools import GIT_HISTORY_TOOL_NAME
+from argus.agent.findings import RECORDED_ID, FindingCollector
+from argus.agent.tools import GIT_HISTORY_TOOL_NAME, REPORT_FINDING_TOOL_NAME
 from argus.settings import DEFAULT_ANSWER_HOLDS
 from argus.telemetry import get_logger
 from argus.tracing import redact, summarize
@@ -37,7 +38,14 @@ DENIED_TOOLS = frozenset(
     {"Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "WebFetch", "WebSearch"}
 )
 DENIED_TOOL_MATCHER = "|".join(sorted(DENIED_TOOLS))
-ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Agent", GIT_HISTORY_TOOL_NAME)
+ALLOWED_TOOLS: tuple[str, ...] = (
+    "Read",
+    "Grep",
+    "Glob",
+    "Agent",
+    GIT_HISTORY_TOOL_NAME,
+    REPORT_FINDING_TOOL_NAME,
+)
 READ_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", GIT_HISTORY_TOOL_NAME)
 """The tools that only look at code; the lead's reading budget governs these."""
 READ_TOOL_MATCHER = "|".join(sorted(READ_TOOLS))
@@ -107,6 +115,8 @@ class HookState:
     clock: Callable[[], float] = time.monotonic
     recorder: "TraceRecorder | None" = None
     """Builds the query's spans; attached by the runner for the length of one query."""
+    collector: FindingCollector | None = None
+    """Where report_finding records findings; the hooks attribute each id to its reporter."""
 
     def agent(self, data: HookData) -> AgentCounters:
         """The counters for whichever agent a hook input came from."""
@@ -271,14 +281,14 @@ def await_specialists(state: HookState) -> Hook:
             waiting = sorted(set(state.running.values()))
             reason = (
                 f"Still running: {', '.join(waiting)}. Wait for their findings, "
-                "merge them with the others, then answer with the Review."
+                "then answer with the Triage."
             )
             log.warning("answer_held", waiting=waiting)
         else:
             finished = sorted(set(state.finished))
             reason = (
                 f"{', '.join(finished)} just finished; its report may not have reached you "
-                "yet. Wait for it, merge it with the others, then answer with the Review."
+                "yet. Wait for it, then answer with the Triage."
             )
             log.warning("answer_held", finished=finished)
         state.finished.clear()
@@ -308,7 +318,7 @@ def limit_lead_reading(state: HookState) -> Hook:
         state.reads_denied += 1
         reason = (
             f"You have used the {budget} reads a lead gets. The specialists have read "
-            "the change for you: merge what they reported and answer with the Review."
+            "the change for you and recorded what they found: answer with the Triage."
         )
         get_logger().warning("lead_read_denied", tool=data.get("tool_name"), budget=budget)
         return _deny(state, data, reason)
@@ -349,6 +359,8 @@ def audit_tool_call(state: HookState) -> Hook:
             # PostToolUse fires only once the SDK has validated the answer; a
             # rejected one goes to PostToolUseFailure instead.
             state.accepted_answer = data.get("tool_input")
+        if data.get("tool_name") == REPORT_FINDING_TOOL_NAME:
+            _attribute_report(state, data)
         get_logger().info(
             "tool_call", tool=data.get("tool_name"), input=summarize(data.get("tool_input"))
         )
@@ -357,6 +369,21 @@ def audit_tool_call(state: HookState) -> Hook:
         return {}
 
     return hook
+
+
+def _attribute_report(state: HookState, data: HookData) -> None:
+    """Credit a recorded finding to whoever reported it; the tool's handler cannot see that."""
+    if state.collector is None:
+        return
+    match = RECORDED_ID.search(str(data.get("tool_response", "")))
+    if match is None:
+        return
+    agent_id = data.get("agent_id")
+    if agent_id:
+        reporter = str(data.get("agent_type") or state.agent_types.get(agent_id) or "agent")
+    else:
+        reporter = LEAD_AGENT
+    state.collector.attribute(match.group(1), reporter)
 
 
 def audit_tool_failure(state: HookState) -> Hook:

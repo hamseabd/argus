@@ -8,6 +8,7 @@ import pytest
 
 from argus import telemetry
 from argus.agent import trace as trace_module
+from argus.agent.findings import FindingCollector
 from argus.agent.hooks import (
     ALLOWED_TOOLS,
     DENIED_TOOL_MATCHER,
@@ -24,6 +25,7 @@ from argus.agent.hooks import (
     deny_mutating_tools,
     limit_lead_reading,
 )
+from argus.agent.tools import REPORT_FINDING_TOOL_NAME
 from argus.agent.trace import TraceRecorder
 
 REPO = Path("/repo")
@@ -637,3 +639,99 @@ def test_a_hold_limit_of_zero_never_holds() -> None:
     _subagent(hooks, "SubagentStart", "a-1", "security")
 
     assert _held(state) is False
+
+
+def test_a_recorded_finding_is_attributed_to_the_agent_that_reported_it(tmp_path) -> None:
+    (tmp_path / "a.py").write_text("x\n")
+    collector = FindingCollector(tmp_path)
+    collector.add(
+        {
+            "file": "a.py",
+            "line": 1,
+            "end_line": None,
+            "severity": "low",
+            "category": "quality",
+            "title": "t",
+            "description": "twenty characters at least",
+            "evidence": "twenty characters at least",
+            "suggested_fix": None,
+            "confidence": 0.5,
+        }
+    )
+    state = HookState(collector=collector)
+    post = audit_tool_call(state)
+
+    asyncio.run(
+        post(
+            hook_input(
+                REPORT_FINDING_TOOL_NAME,
+                "PostToolUse",
+                agent_id="a-q",
+                agent_type="quality",
+                tool_response=[{"type": "text", "text": "Recorded F1."}],
+            ),
+            None,
+            {"signal": None},
+        )
+    )
+
+    assert [f.reported_by for f in collector.findings()] == ["quality"]
+
+
+def test_a_finding_the_lead_records_itself_is_attributed_to_the_lead(tmp_path) -> None:
+    (tmp_path / "a.py").write_text("x\n")
+    collector = FindingCollector(tmp_path)
+    collector.add(
+        {
+            "file": "a.py",
+            "line": 1,
+            "end_line": None,
+            "severity": "low",
+            "category": "quality",
+            "title": "t",
+            "description": "twenty characters at least",
+            "evidence": "twenty characters at least",
+            "suggested_fix": None,
+            "confidence": 0.5,
+        }
+    )
+    state = HookState(collector=collector)
+
+    asyncio.run(
+        audit_tool_call(state)(
+            hook_input(REPORT_FINDING_TOOL_NAME, "PostToolUse", tool_response="Recorded F1."),
+            None,
+            {"signal": None},
+        )
+    )
+
+    assert collector.findings()[0].reported_by == LEAD_AGENT
+
+
+def test_a_refused_report_attributes_nothing(tmp_path) -> None:
+    collector = FindingCollector(tmp_path)
+    state = HookState(collector=collector)
+    refused = {
+        "content": [{"type": "text", "text": "Not recorded: line: must be at least 1"}],
+        "is_error": True,
+    }
+
+    asyncio.run(
+        audit_tool_call(state)(
+            hook_input(
+                REPORT_FINDING_TOOL_NAME, "PostToolUse", agent_id="a-q", tool_response=refused
+            ),
+            None,
+            {"signal": None},
+        )
+    )
+
+    assert collector.findings() == []
+
+
+def test_the_leads_refusals_point_it_at_the_triage() -> None:
+    state = HookState(read_budget=0)
+    out = asyncio.run(limit_lead_reading(state)(hook_input("Read"), None, {"signal": None}))
+
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Triage" in reason and "Review" not in reason

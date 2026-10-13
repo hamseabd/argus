@@ -14,6 +14,7 @@ from argus.domain.models import (
     ReviewResult,
     RunConfig,
     StageMetrics,
+    Triage,
     Verdict,
     matches_known,
     rank_findings,
@@ -350,3 +351,35 @@ def test_review_result_carries_an_optional_config() -> None:
     assert without.config is None
     assert with_config.config is not None
     assert with_config.config.lead_model == "claude-opus-5"
+
+
+def test_a_finding_records_who_reported_it_and_defaults_to_nobody() -> None:
+    base = dict(
+        id="security-1",
+        file="a.py",
+        line=1,
+        severity="low",
+        category="security",
+        title="t",
+        description="d",
+        evidence="e",
+        confidence=0.5,
+    )
+
+    assert Finding(**base).reported_by is None
+    assert Finding(**base, reported_by="security").reported_by == "security"
+
+
+def test_a_triage_names_what_to_drop_and_why() -> None:
+    triage = Triage(
+        summary="s",
+        files_reviewed=["a.py"],
+        dropped=[{"id": "F2", "reason": "duplicate of F1"}],
+    )
+
+    assert triage.dropped[0].id == "F2"
+    assert triage.dropped_ids == {"F2"}
+
+
+def test_a_triage_without_drops_keeps_everything() -> None:
+    assert Triage(summary="s", files_reviewed=[], dropped=[]).dropped_ids == set()

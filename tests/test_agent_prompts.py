@@ -85,6 +85,14 @@ def test_lead_prompt_forbids_placeholder_output() -> None:
     assert "placeholder" in text
 
 
+def test_lead_prompt_triages_recorded_findings_by_id_instead_of_copying_them() -> None:
+    text = load_prompt("lead")
+
+    assert "report_finding" in text
+    assert "`dropped`" in text
+    assert "do not copy" in text.lower()
+
+
 def test_specialist_prompts_stay_inside_the_change() -> None:
     for name in ("correctness", "security", "quality"):
         assert "outside the diff" in load_prompt(name), name
@@ -93,10 +101,12 @@ def test_specialist_prompts_stay_inside_the_change() -> None:
 def test_specialist_prompts_share_the_finding_contract() -> None:
     for name in ("correctness", "security", "quality"):
         text = load_prompt(name)
-        assert "JSON array" in text
+        assert "report_finding" in text
+        assert "once per finding" in text
         for field in ("file", "line", "severity", "category", "title", "evidence", "confidence"):
-            assert f'"{field}"' in text
-        assert f'"category": "{name}"' in text
+            assert f"`{field}`" in text
+        assert f"`category` is `{name}`" in text
+        assert "one line per finding" in text  # the lead triages from these lines
 
 
 def test_verifier_prompt_tries_to_refute() -> None:

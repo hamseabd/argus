@@ -4,8 +4,8 @@ from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions
 
 from argus.agent.hooks import ALLOWED_TOOLS, DENIED_TOOLS, HookState
 from argus.agent.options import SPECIALISTS, lead_options, specialist_agents, verifier_options
-from argus.agent.schemas import review_schema, verdict_schema
-from argus.agent.tools import GIT_HISTORY_TOOL_NAME
+from argus.agent.schemas import triage_schema, verdict_schema
+from argus.agent.tools import GIT_HISTORY_TOOL_NAME, REPORT_FINDING_TOOL_NAME
 from argus.domain.models import ReviewContext
 from argus.settings import Settings
 
@@ -31,7 +31,7 @@ def test_lead_options_follow_the_spec(tmp_path: Path) -> None:
     assert set(opts.allowed_tools) == set(ALLOWED_TOOLS)
     assert opts.tools == ["Read", "Grep", "Glob", "Agent"]
     assert set(opts.disallowed_tools) >= DENIED_TOOLS
-    assert opts.output_format == {"type": "json_schema", "schema": review_schema()}
+    assert opts.output_format == {"type": "json_schema", "schema": triage_schema()}
     assert isinstance(opts.system_prompt, str) and "all three" in opts.system_prompt
     assert set(opts.agents) == set(SPECIALISTS)
     assert set(opts.hooks) == {
@@ -62,7 +62,13 @@ def test_specialists_are_read_only_sonnet_agents() -> None:
         assert agent.effort == "medium"
         assert agent.maxTurns == 25
         assert agent.background is False  # intent only; the env below is what the CLI obeys
-        assert agent.tools == ["Read", "Grep", "Glob", GIT_HISTORY_TOOL_NAME]
+        assert agent.tools == [
+            "Read",
+            "Grep",
+            "Glob",
+            GIT_HISTORY_TOOL_NAME,
+            REPORT_FINDING_TOOL_NAME,
+        ]
         assert "Agent" not in agent.tools
         assert name in agent.description
         assert len(agent.prompt) > 200
