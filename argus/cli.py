@@ -10,6 +10,7 @@ import typer
 from pydantic import ValidationError
 
 from argus import __version__, telemetry, tracing
+from argus.agent.prompts import prompts_digest
 from argus.auth import credential_problem, credential_source
 from argus.context.git import head_sha, local_context, repo_root
 from argus.context.github import GitHubClient, parse_repo, pr_context, repo_from_remote
@@ -18,11 +19,13 @@ from argus.domain.models import SEVERITY_ORDER, Finding, KnownFinding, ReviewCon
 from argus.pipeline import run_review
 from argus.report.github_review import build_review, known_findings_from
 from argus.report.markdown import render_report
+from argus.report.summary import render_summary
 from argus.settings import Settings
 
 EXIT_ERROR = 1
 EXIT_USAGE = 2  # Click's own code for a bad command line; kept distinct from the gate
 EXIT_GATE = 3
+STEP_SUMMARY_VAR = "GITHUB_STEP_SUMMARY"
 
 app = typer.Typer(
     help="Argus: a code-review agent on the Claude Agent SDK.",
@@ -89,6 +92,13 @@ def review(
             help="Report findings an earlier Argus review already posted on the pull request.",
         ),
     ] = False,
+    summary_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--summary",
+            help="Append a Markdown run summary here. Defaults to $GITHUB_STEP_SUMMARY when set.",
+        ),
+    ] = None,
     no_verify: Annotated[bool, typer.Option("--no-verify", help="Skip the verify stage.")] = False,
     fail_on: Annotated[
         str | None,
@@ -121,6 +131,7 @@ def review(
     telemetry.bind_run(run_id=run_id)
     _check_credentials()
     target = _github_target(pr, repo) if pr is not None else None
+    summary_path = summary_path or _step_summary_from_env()
 
     with tracing.session():
         from argus.agent.review import SdkReviewAgent  # keep the SDK import lazy
@@ -160,15 +171,20 @@ def review(
                     verify_concurrency=settings.verify_concurrency,
                     run_id=run_id,
                     known=known,
+                    config=settings.run_config(prompts_digest()),
                 )
             )
         except ArgusError as exc:
             _fail(str(exc))
         if json_path is not None:
             _write_json(json_path, result)
+        if summary_path is not None:
+            _append_summary(summary_path, render_summary(result, context))
         typer.echo(render_report(result), nl=False)
         if post and target is not None:
-            _post_review(target.client, context, result)
+            url = _post_review(target.client, context, result)
+            if summary_path is not None:
+                _append_summary(summary_path, f"Posted: {url}\n")
     if fail_on is not None and gate_tripped(result.review.findings, fail_on):
         raise typer.Exit(EXIT_GATE)
 
@@ -249,7 +265,7 @@ def _warn_on_head_mismatch(context: ReviewContext) -> None:
         telemetry.get_logger().warning("head_mismatch", local=local, pr_head=context.pr.head_sha)
 
 
-def _post_review(client: GitHubClient, context: ReviewContext, result: ReviewResult) -> None:
+def _post_review(client: GitHubClient, context: ReviewContext, result: ReviewResult) -> str:
     payload = build_review(result, context)
     if context.pr is None:  # build_review already refused this; keep the type checker happy
         _fail("cannot post a review without a pull request")
@@ -259,12 +275,40 @@ def _post_review(client: GitHubClient, context: ReviewContext, result: ReviewRes
         _fail(str(exc))
     telemetry.get_logger().info("review_posted", url=url, inline=len(payload["comments"]))
     typer.echo(f"Posted review: {url}")
+    return url
 
 
 def _write_json(path: Path, result: ReviewResult) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(result.model_dump_json(indent=2) + "\n")
     telemetry.get_logger().info("artifact_written", path=str(path))
+
+
+def _step_summary_from_env() -> Path | None:
+    """GitHub Actions names the job page's summary file; a run there fills it in unasked."""
+    value = os.environ.get(STEP_SUMMARY_VAR, "").strip()
+    return Path(value) if value else None
+
+
+def _append_summary(path: Path, text: str) -> None:
+    """Add to the summary file, never replace it: a job's earlier steps may have written there.
+
+    An earlier step may have left the file without a final newline; Markdown
+    reads a heading only at the start of a line, so one is supplied then.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    unterminated = path.exists() and path.stat().st_size > 0 and not _ends_with_newline(path)
+    with path.open("a", encoding="utf-8") as out:
+        if unterminated:
+            out.write("\n")
+        out.write(text)
+    telemetry.get_logger().info("summary_written", path=str(path))
+
+
+def _ends_with_newline(path: Path) -> bool:
+    with path.open("rb") as existing:
+        existing.seek(-1, os.SEEK_END)
+        return existing.read(1) == b"\n"
 
 
 def _settings_problem(exc: ValidationError) -> str:

@@ -103,7 +103,14 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
         )
 
     async def fake_run_review(
-        context, agent, *, verify=True, verify_concurrency=4, run_id=None, known=()
+        context,
+        agent,
+        *,
+        verify=True,
+        verify_concurrency=4,
+        run_id=None,
+        known=(),
+        config=None,
     ):
         calls["context"] = context
         calls["known"] = list(known)
@@ -280,3 +287,30 @@ def test_without_a_reviewer_identity_no_earlier_review_is_trusted(
     assert result.exit_code == 0, result.output
     assert "fetched_known" not in stubbed
     assert stubbed["known"] == []
+
+
+def test_summary_records_the_posted_review_url(stubbed: dict, tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+
+    result = runner.invoke(
+        cli.app, ["review", "--pr", "7", "--repo", "o/r", "--post", "--summary", str(summary)]
+    )
+
+    assert result.exit_code == 0, result.output
+    text = summary.read_text()
+    assert "## Argus review" in text
+    assert text.rstrip().endswith("Posted: https://github.com/o/r/pull/7#pullrequestreview-9")
+
+
+def test_summary_survives_a_posting_failure_without_a_url(stubbed: dict, tmp_path: Path) -> None:
+    stubbed["post_outcome"] = GitHubError(422, "nope")
+    summary = tmp_path / "summary.md"
+
+    result = runner.invoke(
+        cli.app, ["review", "--pr", "7", "--repo", "o/r", "--post", "--summary", str(summary)]
+    )
+
+    assert result.exit_code == 1
+    text = summary.read_text()
+    assert "## Argus review" in text
+    assert "Posted:" not in text
