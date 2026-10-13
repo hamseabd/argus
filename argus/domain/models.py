@@ -198,6 +198,10 @@ class ReviewContext(_Model):
         default_factory=list,
         description="Files omitted from diff_text because of the size cap.",
     )
+    ignored_files: list[str] = Field(
+        default_factory=list,
+        description="Files left out of the review because they match an ignore pattern.",
+    )
     pr: PRInfo | None = None
 
 

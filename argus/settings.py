@@ -19,6 +19,14 @@ LogLevel = Literal["debug", "info", "warning"]
 
 DEFAULT_ANSWER_HOLDS = 3
 """Times the lead's answer may be held in one query before it goes through regardless."""
+DEFAULT_IGNORE_PATHS = "*.min.js,*.min.css"
+"""Minified bundles: generated and unreadable as a diff.
+
+Lockfiles are deliberately not here. They are large and tedious, but a
+dependency substitution or a changed integrity hash hides in exactly one,
+and a reviewer that skips them by default would miss it; add `*.lock` to
+ARGUS_IGNORE_PATHS to opt out for a repository that reviews them elsewhere.
+"""
 
 
 class Settings(BaseSettings):
@@ -50,6 +58,19 @@ class Settings(BaseSettings):
     verify_concurrency: int = Field(default=4, ge=1)
 
     diff_size_cap: int = Field(default=DIFF_SIZE_CAP, ge=1)
+    ignore_paths: str = Field(
+        default=DEFAULT_IGNORE_PATHS,
+        description=(
+            "Comma-separated patterns for changed files to leave out of the review: "
+            "a file name or glob (*.min.js) in any directory, a directory at the repository "
+            "root (vendor/), or a path glob (docs/*.md). Empty turns the filter off."
+        ),
+    )
+
+    @property
+    def ignore_patterns(self) -> tuple[str, ...]:
+        return tuple(p.strip() for p in self.ignore_paths.split(",") if p.strip())
+
     log_format: LogFormat = "auto"
     log_level: LogLevel = "info"
     trace_content: bool = Field(

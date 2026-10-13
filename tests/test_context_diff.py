@@ -8,7 +8,9 @@ from argus.context.diff import (
     cap_diff,
     commentable_index,
     diff_sections,
+    matches_ignore,
     parse_diff,
+    split_ignored,
 )
 from argus.domain.errors import ArgusError, DiffParseError
 from argus.domain.models import ChangedFile
@@ -290,3 +292,50 @@ def test_size_bytes_is_computed_once() -> None:
 
     assert file.size_bytes == len(file.text.encode())
     assert "size_bytes" in file.__dataclass_fields__
+
+
+@pytest.mark.parametrize(
+    ("pattern", "path", "expected"),
+    [
+        ("*.lock", "uv.lock", True),
+        ("*.lock", "sub/dir/poetry.lock", True),
+        ("*.lock", "lockfile.py", False),
+        ("package-lock.json", "web/package-lock.json", True),
+        ("package-lock.json", "web/package-lock.json.bak", False),
+        ("vendor/", "vendor/lib.js", True),
+        ("vendor/", "vendor/deep/lib.js", True),
+        ("vendor/", "src/vendor/lib.js", False),
+        ("vendor/", "vendor", False),
+        ("docs/*.md", "docs/guide.md", True),
+        ("docs/*.md", "docs/sub/guide.md", True),  # fnmatch's * crosses / on purpose
+        ("docs/*.md", "guide.md", False),
+        ("generated/**/*.pb.go", "generated/api/v1/x.pb.go", True),
+    ],
+)
+def test_matches_ignore_follows_the_three_pattern_shapes(
+    pattern: str, path: str, expected: bool
+) -> None:
+    assert matches_ignore(path, [pattern]) is expected
+
+
+def test_matches_ignore_with_no_patterns_matches_nothing() -> None:
+    assert matches_ignore("uv.lock", []) is False
+
+
+def test_split_ignored_keeps_both_lists_in_diff_order() -> None:
+    files = parse_diff(load("mixed.diff"))
+    paths = [f.path for f in files]
+
+    kept, ignored = split_ignored(files, [paths[1], paths[-1]])
+
+    assert [f.path for f in kept] == [p for p in paths if p not in {paths[1], paths[-1]}]
+    assert [f.path for f in ignored] == [paths[1], paths[-1]]
+
+
+def test_split_ignored_with_no_patterns_keeps_everything() -> None:
+    files = parse_diff(load("mixed.diff"))
+
+    kept, ignored = split_ignored(files, [])
+
+    assert kept == files
+    assert ignored == []
