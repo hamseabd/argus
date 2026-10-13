@@ -244,6 +244,13 @@ Exit codes: `0` success, `1` error, `2` bad command line, `3` severity gate trip
 Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` environment variables (`ARGUS_LEAD_MODEL`, `ARGUS_VERIFY_CONCURRENCY`, `ARGUS_LOG_FORMAT`, `ARGUS_LOG_LEVEL`, and so on; see `argus/settings.py`).
 `ARGUS_IGNORE_PATHS` is the comma-separated ignore list; its default is `*.min.js,*.min.css`, and an empty value turns the filter off. Lockfiles are not ignored by default on purpose: a dependency substitution or a changed integrity hash hides in exactly one, and a review that skipped them would miss a supply-chain change; add `*.lock,package-lock.json,pnpm-lock.yaml,go.sum` for a repository that reviews dependencies elsewhere. Ignored files are logged as `files_ignored` and named in the posted review, and a change made only of ignored files fails before any query with a message that names them.
 
+### Review rules
+
+A `REVIEW.md` at the root of the base branch is the maintainers' brief to the reviewer: what a defect is in this codebase and what is deliberate, such as "money is integer cents" or "the ORM escapes every query".
+Argus reads it from the base branch, never from the change under review, so a pull request that edits or adds `REVIEW.md` cannot tell the reviewer to look away from itself.
+The lead gets it in its prompt, and the specialists and the verifier in theirs, fenced and labelled: the rules shape what counts as a finding and how much it matters, and cannot change the tools, the process, or the shape of an answer.
+It is cut at 8,000 characters, so it cannot crowd out the diff.
+
 ### Tracing
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` (and `OTEL_EXPORTER_OTLP_HEADERS` for auth) and a review is exported as one OpenTelemetry trace; unset, nothing is exported.

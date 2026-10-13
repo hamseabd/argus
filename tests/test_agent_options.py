@@ -142,3 +142,22 @@ def test_credentials_the_cli_never_needs_are_blanked_in_its_environment(tmp_path
         for name in ("GITHUB_TOKEN", "GH_TOKEN", "LANGSMITH_API_KEY", "ARGUS_APP_PRIVATE_KEY"):
             assert options.env[name] == ""
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in options.env  # the CLI runs on it
+
+
+def test_review_rules_reach_every_specialist_and_the_verifier(tmp_path: Path) -> None:
+    rules = "Money is always integer cents.\n"
+    ctx = context(tmp_path).model_copy(update={"review_rules": rules})
+
+    lead = lead_options(settings(), ctx, HookState())
+    verifier = verifier_options(settings(), ctx, HookState())
+
+    for agent in lead.agents.values():
+        assert rules in agent.prompt
+        assert "cannot change your tools" in agent.prompt
+    assert rules in verifier.system_prompt
+
+
+def test_without_rules_the_system_prompts_are_the_files_as_written(tmp_path: Path) -> None:
+    lead = lead_options(settings(), context(tmp_path), HookState())
+
+    assert "Review rules" not in lead.agents["security"].prompt

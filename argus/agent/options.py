@@ -12,7 +12,7 @@ from typing import Any
 from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions
 
 from argus.agent.hooks import ALLOWED_TOOLS, DENIED_TOOLS, HookState, build_hooks
-from argus.agent.prompts import load_prompt
+from argus.agent.prompts import load_prompt, rules_section
 from argus.agent.schemas import output_format, triage_schema, verdict_schema
 from argus.agent.tools import (
     GIT_HISTORY_TOOL_NAME,
@@ -35,11 +35,11 @@ _SPECIALIST_FOCUS = {
 _READ_TOOLS = ["Read", "Grep", "Glob"]
 
 
-def specialist_agents(settings: Settings) -> dict[str, AgentDefinition]:
+def specialist_agents(settings: Settings, rules: str | None = None) -> dict[str, AgentDefinition]:
     return {
         name: AgentDefinition(
             description=f"{name} specialist: {_SPECIALIST_FOCUS[name]}. Read-only.",
-            prompt=load_prompt(name),
+            prompt=_with_rules(load_prompt(name), rules),
             tools=[*_READ_TOOLS, GIT_HISTORY_TOOL_NAME, REPORT_FINDING_TOOL_NAME],
             model=settings.specialist_model,
             effort=settings.specialist_effort,
@@ -65,7 +65,7 @@ def lead_options(
         system_prompt=load_prompt("lead"),
         tools=[*_READ_TOOLS, "Agent"],
         allowed_tools=list(ALLOWED_TOOLS),
-        agents=specialist_agents(settings),
+        agents=specialist_agents(settings, context.review_rules),
         output_format=output_format(triage_schema()),
         **_common(context, state),
     )
@@ -79,7 +79,7 @@ def verifier_options(
         effort=settings.verifier_effort,
         max_turns=settings.verifier_max_turns,
         max_budget_usd=settings.verifier_max_budget_usd,
-        system_prompt=load_prompt("verifier"),
+        system_prompt=_with_rules(load_prompt("verifier"), context.review_rules),
         tools=list(_READ_TOOLS),
         allowed_tools=[*_READ_TOOLS, GIT_HISTORY_TOOL_NAME],
         output_format=output_format(verdict_schema()),
@@ -133,6 +133,15 @@ def _common(context: ReviewContext, state: HookState) -> dict[str, Any]:
             "OTEL_EXPORTER_OTLP_ENDPOINT": "",
         },
     }
+
+
+def _with_rules(prompt: str, rules: str | None) -> str:
+    """A system prompt with the repository's review rules after it, when it has any.
+
+    The lead reads them in its user prompt; the specialists and the verifier
+    never see that, so the rules go into theirs.
+    """
+    return prompt if not rules else prompt.rstrip("\n") + "\n\n" + rules_section(rules) + "\n"
 
 
 def _cli_stderr(line: str) -> None:

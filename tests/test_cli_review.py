@@ -85,6 +85,7 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         config=None,
     ):
         calls["run_id"] = run_id
+        calls["context"] = context
         calls["known"] = list(known)
         calls["config"] = config
         calls["verify"] = verify
@@ -411,3 +412,19 @@ def test_summary_is_written_even_when_the_severity_gate_trips(
 
     assert result.exit_code == cli.EXIT_GATE
     assert "## Argus review" in summary.read_text()
+
+
+def test_local_review_reads_the_rules_from_the_base(stubbed: dict, monkeypatch) -> None:
+    asked: list = []
+
+    def fake_rules(repo, base):
+        asked.append(base)
+        return "Money is integer cents.\n"
+
+    monkeypatch.setattr(cli, "rules_from_git", fake_rules)
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--base", "develop"])
+
+    assert result.exit_code == 0, result.output
+    assert asked == ["develop"]
+    assert stubbed["context"].review_rules == "Money is integer cents.\n"

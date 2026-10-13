@@ -271,3 +271,16 @@ def test_a_re_review_shows_only_the_increment_and_says_so() -> None:
     assert "pkg/fix.py (modified)" in text
     assert "+fixed" in text
     assert "pkg/module.py" not in text  # the rest of the pull request was reviewed before
+
+
+def test_the_repository_s_review_rules_reach_the_lead_fenced_and_attributed() -> None:
+    rules = "Money is always integer cents; flag any float arithmetic on amounts.\n"
+    text = lead_user_prompt(context().model_copy(update={"review_rules": rules}))
+
+    assert "## Review rules for this repository" in text
+    assert "base branch" in text
+    assert "```\n" + rules in text
+
+
+def test_without_rules_the_lead_prompt_has_no_rules_section() -> None:
+    assert "Review rules" not in lead_user_prompt(context())

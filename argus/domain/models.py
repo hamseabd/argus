@@ -358,6 +358,10 @@ class ReviewContext(_Model):
         default=None,
         description="Set on a re-review: only these changes are reviewed, not the whole diff.",
     )
+    review_rules: str | None = Field(
+        default=None,
+        description="REVIEW.md from the base branch: the maintainers' rules for reviews here.",
+    )
 
 
 def rank_findings(findings: list[Finding]) -> list[Finding]:
