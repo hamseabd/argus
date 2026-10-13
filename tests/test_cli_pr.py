@@ -74,6 +74,9 @@ class FakeGitHub:
     def pr_review_comments(self, owner: str, repo: str, number: int) -> list[dict]:
         return self.calls.get("comments", [])
 
+    def default_branch(self, owner: str, repo: str) -> str:
+        return "main"
+
     def file_text(self, owner: str, repo: str, path: str, ref: str) -> str:
         raise GitHubError(404, "Not Found")
 
@@ -406,11 +409,11 @@ def test_full_reviews_the_whole_pull_request_but_still_skips_known_findings(
     assert stubbed["fetched_known"] is True
 
 
-def test_pr_review_reads_the_rules_at_the_base_branch(stubbed: dict, monkeypatch) -> None:
+def test_pr_review_reads_the_rules_of_the_repository(stubbed: dict, monkeypatch) -> None:
     asked: list = []
 
-    def fake_rules(client, owner, repo, ref):
-        asked.append((owner, repo, ref))
+    def fake_rules(client, owner, repo):
+        asked.append((owner, repo))
         return "Prefer explicit errors.\n"
 
     monkeypatch.setattr(cli, "rules_from_github", fake_rules)
@@ -418,7 +421,7 @@ def test_pr_review_reads_the_rules_at_the_base_branch(stubbed: dict, monkeypatch
     result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
 
     assert result.exit_code == 0, result.output
-    assert asked == [("o", "r", "main")]
+    assert asked == [("o", "r")]
     assert stubbed["context"].review_rules == "Prefer explicit errors.\n"
 
 
