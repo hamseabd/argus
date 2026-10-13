@@ -12,8 +12,9 @@ report uses. Over the reported findings:
 - a false negative is a seeded bug that no finding matches.
 
 The verifier is scored separately, on every finding it decided (confirmed or
-rejected; a failed verification is not a decision): confirming a real bug or
-rejecting a false one is right, the other two are wrong.
+rejected; a failed or inconclusive verification is not a decision): confirming
+a real bug or rejecting a false one is right, the other two are wrong. How
+often it answered inconclusive is counted on its own.
 
 Pure functions over domain types, with no SDK imports: the tests run it offline.
 """
@@ -54,6 +55,7 @@ class CaseScore(_Model):
     true_bugs_rejected: int = 0
     false_positives_confirmed: int = 0
     false_positives_rejected: int = 0
+    verifier_inconclusive: int = 0
     cost_usd: float = 0.0
     turns: int = 0
     duration_ms: int = 0
@@ -91,6 +93,7 @@ class Summary(_Model):
     true_bugs_rejected: int
     false_positives_confirmed: int
     false_positives_rejected: int
+    verifier_inconclusive: int
     verifier_accuracy: float | None
     total_cost_usd: float
     mean_cost_usd: float | None
@@ -152,6 +155,7 @@ def score_case(case: Case, result: ReviewResult) -> CaseScore:
         true_bugs_rejected=verdicts[(True, "rejected")],
         false_positives_confirmed=verdicts[(False, "confirmed")],
         false_positives_rejected=verdicts[(False, "rejected")],
+        verifier_inconclusive=sum(v.verdict == "inconclusive" for v in result.verdicts),
         cost_usd=result.total_cost_usd,
         turns=sum(m.num_turns for m in result.metrics),
         duration_ms=result.duration_ms,
@@ -216,6 +220,7 @@ def summarize(scores: Iterable[CaseScore]) -> Summary:
         true_bugs_rejected=tr,
         false_positives_confirmed=fc,
         false_positives_rejected=fr,
+        verifier_inconclusive=sum(s.verifier_inconclusive for s in scores),
         verifier_accuracy=_ratio(tc + fr, tc + tr + fc + fr),
         total_cost_usd=total_cost,
         mean_cost_usd=_ratio(total_cost, len(scores)),
@@ -246,7 +251,7 @@ def render_markdown(scores_by_mode: Mapping[str, list[CaseScore]]) -> str:
         lines.append(
             f"| {mode} | {_pct(s.precision)} | {_pct(s.recall)} "
             f"| {_pct(s.clean_control_fp_rate)} ({s.clean_controls_flagged}/{s.clean_controls}) "
-            f"| {_pct(s.verifier_accuracy)} "
+            f"| {_pct(s.verifier_accuracy)}{_inconclusive(s.verifier_inconclusive)} "
             f"| {s.true_positives} / {s.false_positives} / {s.false_negatives} "
             f"| ${_num(s.mean_cost_usd, '.2f')} | {_num(s.mean_turns, '.1f')} "
             f"| {_num(latency, '.0f')} s | {s.errors} |"
@@ -296,6 +301,10 @@ def render_markdown(scores_by_mode: Mapping[str, list[CaseScore]]) -> str:
             f"| {case} | " + " | ".join(_case_cell(per_mode.get(m, [])) for m in modes) + " |"
         )
     return "\n".join(lines) + "\n"
+
+
+def _inconclusive(count: int) -> str:
+    return f" ({count} inconclusive)" if count else ""
 
 
 def _case_cell(runs: list[CaseScore]) -> str:

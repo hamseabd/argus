@@ -148,7 +148,8 @@ async def _run_review(
                 continue
             verdicts.append(outcome.value)
             metrics.append(outcome.metrics)
-            statuses[finding.id] = outcome.value.verdict
+            if outcome.value.verdict != "inconclusive":
+                statuses[finding.id] = outcome.value.verdict
 
     findings = [f.with_status(statuses[f.id]) for f in review.findings]
     total_cost = round(sum(m.cost_usd for m in metrics) + failed_cost, 6)

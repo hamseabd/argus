@@ -106,7 +106,7 @@ def test_verdict_schema_excludes_finding_id() -> None:
     props = verdict_schema()["properties"]
 
     assert set(props) == {"verdict", "reasoning", "confidence"}
-    assert props["verdict"]["enum"] == ["confirmed", "rejected"]
+    assert props["verdict"]["enum"] == ["confirmed", "rejected", "inconclusive"]
 
 
 def test_the_triage_names_drops_by_id_and_reason() -> None:

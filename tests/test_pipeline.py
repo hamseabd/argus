@@ -413,6 +413,18 @@ def test_nothing_token_shaped_survives_into_the_result(tmp_path: Path) -> None:
     assert result.review.findings[0].status == "confirmed"
 
 
+def test_an_inconclusive_verdict_leaves_the_finding_unverified_and_keeps_the_verdict(
+    tmp_path: Path,
+) -> None:
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    agent = FakeAgent(review, {"correctness-1": "inconclusive"})
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    assert result.review.findings[0].status == "unverified"
+    assert [v.verdict for v in result.verdicts] == ["inconclusive"]
+
+
 def test_a_failed_verification_logs_its_error_without_a_token(tmp_path: Path) -> None:
     stream = io.StringIO()
     telemetry.configure(log_format="json", stream=stream)

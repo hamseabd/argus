@@ -8,6 +8,7 @@ from argus.domain.models import (
     ReviewContext,
     ReviewResult,
     StageMetrics,
+    Verdict,
 )
 from argus.report.github_review import REVIEW_MARKER, build_review, known_findings_from
 
@@ -130,16 +131,19 @@ def test_body_has_marker_summary_counts_and_footer() -> None:
     body = payload["body"]
     assert body.startswith(REVIEW_MARKER + "\n")
     assert "Adds a cache." in body
-    assert "1 finding: 1 confirmed, 1 rejected and not shown." in body
+    assert "1 finding: 1 confirmed, 1 rejected by the verifier." in body
     assert body.rstrip().endswith("session sess")
     assert "Cost $0.75" in body
 
 
-def test_rejected_findings_are_never_posted() -> None:
+def test_rejected_findings_are_never_posted_as_findings() -> None:
     payload = build_review(result([finding(status="rejected")]), context())
 
     assert payload["comments"] == []
-    assert "Stale entry" not in payload["body"]
+    # Only in the folded list of rejections, never as a finding of its own.
+    before, folded = payload["body"].split("<details>")
+    assert "Stale entry" not in before
+    assert "Stale entry" in folded.split("</details>")[0]
 
 
 def test_unverified_findings_are_labelled() -> None:
@@ -283,3 +287,29 @@ def test_known_findings_are_never_posted_again() -> None:
 
     assert len(payload["comments"]) == 1
     assert "already reported" in payload["body"]
+
+
+def test_rejected_findings_are_listed_collapsed_and_are_never_read_back_as_known() -> None:
+    rejected = finding(id="x", line=9, title="Not a real leak", status="rejected")
+    verdict = Verdict(
+        finding_id="x",
+        verdict="rejected",
+        reasoning="The handle is closed by the context manager on line 4.",
+        confidence=0.9,
+    )
+    off_diff = finding(id="correctness-2", line=9, title="Off the diff")
+    review = result([finding(), off_diff, rejected]).model_copy(update={"verdicts": [verdict]})
+
+    payload = build_review(review, context())
+
+    body = payload["body"]
+    details = body.split("<details>")[1].split("</details>")[0]
+    assert "Not a real leak" in details
+    assert "closed by the context manager" in details
+    assert all("Not a real leak" not in c["body"] for c in payload["comments"])
+    known = known_findings_from(
+        [{"id": 1, "user": {"login": "argus[bot]", "type": "Bot"}, "body": body, "html_url": "u"}],
+        [],
+        "argus[bot]",
+    )
+    assert [k.title for k in known] == ["Off the diff"]  # the parser works; it skips rejections

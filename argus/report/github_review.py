@@ -27,9 +27,17 @@ from argus.domain.models import (
     ReviewContext,
     ReviewResult,
     Severity,
+    Verdict,
     rank_findings,
 )
-from argus.report.markdown import finding_body, render_counts, render_finding, render_footer
+from argus.report.markdown import (
+    finding_body,
+    render_counts,
+    render_finding,
+    render_footer,
+    render_rejected,
+    verdicts_by_finding,
+)
 
 REVIEW_MARKER = "<!-- argus:review -->"
 REVIEW_EVENT = "COMMENT"
@@ -54,10 +62,11 @@ def build_review(result: ReviewResult, context: ReviewContext) -> dict[str, Any]
     index = commentable_index(parse_diff(context.diff_text))
     comments: list[dict[str, Any]] = []
     in_body: list[Finding] = []
+    verdicts = verdicts_by_finding(result)
     for finding in rank_findings(result.review.findings):
         lines = index.get(finding.file, frozenset())
         if finding.line in lines:
-            comments.append(_comment(finding, lines))
+            comments.append(_comment(finding, lines, verdicts.get(finding.id)))
         else:
             in_body.append(finding)
     return {
@@ -160,8 +169,12 @@ def _category(word: str) -> Category | None:
     return word if word in ("correctness", "security", "quality") else None  # type: ignore[return-value]
 
 
-def _comment(finding: Finding, lines: frozenset[int]) -> dict[str, Any]:
-    comment: dict[str, Any] = {"path": finding.file, "side": "RIGHT", "body": finding_body(finding)}
+def _comment(finding: Finding, lines: frozenset[int], verdict: Verdict | None) -> dict[str, Any]:
+    comment: dict[str, Any] = {
+        "path": finding.file,
+        "side": "RIGHT",
+        "body": finding_body(finding, verdict),
+    }
     end = finding.end_line
     if (
         end is not None
@@ -183,7 +196,10 @@ def _body(result: ReviewResult, in_body: list[Finding], ignored: list[str]) -> s
         parts.append(f"Not reviewed, ignored by pattern: {names}.")
     if in_body:
         parts.append("## Findings not on the diff")
-        parts.extend(render_finding(f, heading="###") for f in in_body)
+        verdicts = verdicts_by_finding(result)
+        parts.extend(render_finding(f, heading="###", verdict=verdicts.get(f.id)) for f in in_body)
+    if rejected := render_rejected(result):
+        parts.append(rejected)
     parts.append("---")
     parts.append(render_footer(result))
     return "\n\n".join(parts) + "\n"
