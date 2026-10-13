@@ -114,6 +114,11 @@ class GitHubClient:
         )
         return response.text
 
+    def create_check_run(self, owner: str, repo: str, payload: dict[str, Any]) -> str:
+        """Create a completed check run; needs the Checks: write permission."""
+        response = self._request("POST", f"/repos/{owner}/{repo}/check-runs", json=payload)
+        return str(response.json()["html_url"])
+
     def post_review(self, owner: str, repo: str, number: int, payload: dict[str, Any]) -> str:
         response = self._request("POST", f"{_pull(owner, repo, number)}/reviews", json=payload)
         return str(response.json()["html_url"])

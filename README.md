@@ -23,7 +23,7 @@ The verifier confirmed it, and the fix landed with a test before merge.
 - **Reviews a pull request or a local diff.** `argus review --pr 7 --post` or `argus review --diff --base main`.
 - **Orchestrates specialists.** One `query()` runs a lead reviewer on Opus as the orchestrator: it must delegate to `correctness`, `security`, and `quality` subagents on Sonnet in one turn (fan-out). Each specialist records its findings through a `report_finding` tool that validates them on the spot, and the lead triages what was recorded by id, dropping duplicates (fan-in), so no finding is re-typed by another model on its way to the verifier. The lead does not re-check findings itself; that is the verifier's job.
 - **Verifies before it reports.** Every finding gets its own fresh verifier query whose only job is to refute it by reading the code. Rejected findings leave the findings list but stay auditable in a folded list with the verifier's reason; a verifier that cannot settle a claim says `inconclusive`, and that finding, like one whose verification failed, is reported as `unverified`, never as confirmed.
-- **Posts inline.** A finding lands as a review comment on its line when that line is in the diff, otherwise in the review body. A fix confined to the finding's lines comes as a GitHub suggestion the author can apply in one click. The review never requests changes; merge gating is the CLI exit code.
+- **Posts inline.** A finding lands as a review comment on its line when that line is in the diff, otherwise in the review body. A fix confined to the finding's lines comes as a GitHub suggestion the author can apply in one click. The review never requests changes; merge gating is the CLI exit code or, with `--check`, an "Argus" check run that branch protection can require.
 - **Does not repeat itself.** On a re-review it reads its own earlier reviews on the pull request first. A finding that repeats one already posted, same file and title, or same file within two lines with the same category and severity, is marked `known` before verification: not re-verified, not posted again, counted in the report, and still gated, since reported before is not fixed. `--include-known` turns this off.
 It also reviews only what is new: the commit its last review covered is on that review (`commit_id`), so a re-review diffs from there to the new head and the specialists look at those commits alone, while inline comments still anchor to the pull request's whole diff. The same head is not reviewed twice, and after a force-push that removed the reviewed commit the whole pull request is reviewed again. `--full` reviews the whole pull request regardless.
 - **Never touches the repository.** Reviewers get `Read`, `Grep`, `Glob`, `Agent`, and one custom read-only tool served by an in-process MCP server. Mutating tools are removed from the tool set and denied again by a `PreToolUse` hook, so the guardrail is layered, not a prompt instruction.
@@ -238,8 +238,9 @@ argus review --diff --json argus-review.json --fail-on high
 | `--include-known` | Report findings an earlier Argus review already posted on the pull request instead of marking them `known`. Implies `--full`. |
 | `--full` | Review the whole pull request even if Argus reviewed it before; by default a re-review covers only the commits since the last one. |
 | `--fail-on SEVERITY` | Exit 3 if any confirmed or unverified finding is at or above `critical`, `high`, `medium`, or `low`. |
+| `--check` | Post an "Argus" check run on the head: each finding is an annotation, and the conclusion carries the `--fail-on` gate (failure at or above it, neutral below, success with no findings) instead of the exit code. Needs `--pr` and a token with `Checks: write`. |
 
-Exit codes: `0` success, `1` error, `2` bad command line, `3` severity gate tripped.
+Exit codes: `0` success, `1` error, `2` bad command line, `3` severity gate tripped (never with `--check`, where the check run is the gate).
 
 Models, efforts, caps, and concurrency are settings, overridable as `ARGUS_*` environment variables (`ARGUS_LEAD_MODEL`, `ARGUS_VERIFY_CONCURRENCY`, `ARGUS_LOG_FORMAT`, `ARGUS_LOG_LEVEL`, and so on; see `argus/settings.py`).
 `ARGUS_IGNORE_PATHS` is the comma-separated ignore list; its default is `*.min.js,*.min.css`, and an empty value turns the filter off. Lockfiles are not ignored by default on purpose: a dependency substitution or a changed integrity hash hides in exactly one, and a review that skipped them would miss a supply-chain change; add `*.lock,package-lock.json,pnpm-lock.yaml,go.sum` for a repository that reviews dependencies elsewhere. Ignored files are logged as `files_ignored` and named in the posted review, and a change made only of ignored files fails before any query with a message that names them.
@@ -276,7 +277,7 @@ The review is posted by a GitHub App named Argus, through a short-lived installa
 The run's summary is on the job's page in Actions, under the step summary: the findings, cost by stage and by agent, and the configuration fingerprint, without opening the artifact. Argus writes it there on its own when `GITHUB_STEP_SUMMARY` is set, so the workflow passes no flag; that also keeps the dogfood run, which takes its workflow file from the pull request but installs Argus from `main`, working across releases that add options.
 The workflow needs three repository secrets: `CLAUDE_CODE_OAUTH_TOKEN`, and the app's `ARGUS_APP_ID` and `ARGUS_APP_PRIVATE_KEY`.
 An optional fourth, `LANGSMITH_API_KEY`, traces each review to LangSmith; without it nothing is exported.
-The app needs `Pull requests: Read and write` and `Contents: Read-only`, and must be installed on the repository.
+The app needs `Pull requests: Read and write` and `Contents: Read-only`, and must be installed on the repository; to gate merges on the "Argus" check run (the `fail-on` input below) it also needs `Checks: Read and write`.
 
 #### Reviewing another repository
 
@@ -302,6 +303,8 @@ jobs:
       ARGUS_APP_ID: ${{ secrets.ARGUS_APP_ID }}
       ARGUS_APP_PRIVATE_KEY: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
       LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }} # optional: traces each review
+    # with:
+    #   fail-on: high  # optional: an "Argus" check run that fails at high or above; needs Checks: write
 ```
 
 `LANGSMITH_API_KEY` is optional; leave the line out, or the secret unset, and nothing is exported.

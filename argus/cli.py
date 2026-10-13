@@ -17,8 +17,15 @@ from argus.context.git import head_sha, increment_since, local_context, repo_roo
 from argus.context.github import GitHubClient, parse_repo, pr_context, repo_from_remote
 from argus.context.rules import rules_from_git, rules_from_github
 from argus.domain.errors import ArgusError, GitHubError
-from argus.domain.models import SEVERITY_ORDER, Finding, KnownFinding, ReviewContext, ReviewResult
+from argus.domain.models import (
+    SEVERITY_ORDER,
+    KnownFinding,
+    ReviewContext,
+    ReviewResult,
+    gate_tripped,
+)
 from argus.pipeline import run_review
+from argus.report.check_run import build_check_run
 from argus.report.feedback import collect_feedback, render_feedback, summarize_feedback
 from argus.report.github_review import build_review, known_findings_from, last_reviewed_head
 from argus.report.markdown import render_report
@@ -73,6 +80,16 @@ def review(
     base: Annotated[str, typer.Option("--base", help="Base ref for --diff.")] = "main",
     post: Annotated[
         bool, typer.Option("--post", help="Post the review on the pull request (needs --pr).")
+    ] = False,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help=(
+                'Post an "Argus" check run on the head with each finding as an annotation; '
+                "its conclusion carries the --fail-on gate instead of the exit code (needs --pr)."
+            ),
+        ),
     ] = False,
     json_path: Annotated[
         Path | None, typer.Option("--json", help="Write the ReviewResult here.")
@@ -131,6 +148,8 @@ def review(
         raise typer.BadParameter("choose one mode: --pr <number> or --diff")
     if post and pr is None:
         raise typer.BadParameter("--post needs --pr", param_hint="--post")
+    if check and pr is None:
+        raise typer.BadParameter("--check needs --pr", param_hint="--check")
     if fail_on is not None and fail_on not in SEVERITY_ORDER:
         raise typer.BadParameter(
             f"{fail_on!r} is not a severity; expected one of {', '.join(SEVERITY_ORDER)}",
@@ -207,7 +226,11 @@ def review(
             url = _post_review(target.client, context, result)
             if summary_path is not None:
                 _append_summary(summary_path, f"Posted: {url}\n")
-    if fail_on is not None and gate_tripped(result.review.findings, fail_on):
+        if check and target is not None:
+            _post_check_run(target.client, context, result, fail_on)
+    # With --check the check run's conclusion is the gate; failing the job as well
+    # would make a gated merge read the same as Argus crashing.
+    if not check and fail_on is not None and gate_tripped(result.review.findings, fail_on):
         raise typer.Exit(EXIT_GATE)
 
 
@@ -273,16 +296,6 @@ def feedback(
         }
         json_path.write_text(json.dumps(payload, indent=2) + "\n")
     typer.echo(render_feedback(summary), nl=False)
-
-
-def gate_tripped(findings: list[Finding], fail_on: str) -> bool:
-    """True if any finding not refuted is at or above the severity.
-
-    A known finding counts: reported once before is not fixed, so an open
-    critical still fails the gate however many times Argus has seen it.
-    """
-    threshold = SEVERITY_ORDER[fail_on]
-    return any(f.status != "rejected" and SEVERITY_ORDER[f.severity] <= threshold for f in findings)
 
 
 def _earlier_reviews(target: PRTarget, reviewer_login: str) -> list[dict[str, Any]]:
@@ -395,6 +408,20 @@ def _post_review(client: GitHubClient, context: ReviewContext, result: ReviewRes
     telemetry.get_logger().info("review_posted", url=url, inline=len(payload["comments"]))
     typer.echo(f"Posted review: {url}")
     return url
+
+
+def _post_check_run(
+    client: GitHubClient, context: ReviewContext, result: ReviewResult, fail_on: str | None
+) -> None:
+    if context.pr is None:
+        _fail("cannot post a check run without a pull request")
+    payload = build_check_run(result, context, fail_on)
+    try:
+        url = client.create_check_run(context.pr.owner, context.pr.repo, payload)
+    except GitHubError as exc:
+        _fail(str(exc))
+    telemetry.get_logger().info("check_run_posted", url=url, conclusion=payload["conclusion"])
+    typer.echo(f"Check run: {url}")
 
 
 def _write_json(path: Path, result: ReviewResult) -> None:
