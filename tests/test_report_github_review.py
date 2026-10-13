@@ -3,6 +3,7 @@ from pathlib import Path
 from argus.domain.models import (
     ChangedFile,
     Finding,
+    Increment,
     PRInfo,
     Review,
     ReviewContext,
@@ -10,7 +11,12 @@ from argus.domain.models import (
     StageMetrics,
     Verdict,
 )
-from argus.report.github_review import REVIEW_MARKER, build_review, known_findings_from
+from argus.report.github_review import (
+    REVIEW_MARKER,
+    build_review,
+    known_findings_from,
+    last_reviewed_head,
+)
 
 DIFF = (
     "diff --git a/app/cache.py b/app/cache.py\n--- a/app/cache.py\n+++ b/app/cache.py\n"
@@ -313,3 +319,43 @@ def test_rejected_findings_are_listed_collapsed_and_are_never_read_back_as_known
         "argus[bot]",
     )
     assert [k.title for k in known] == ["Off the diff"]  # the parser works; it skips rejections
+
+
+def argus_review(review_id: int, commit: str, login: str = "argus[bot]") -> dict:
+    return {
+        "id": review_id,
+        "commit_id": commit,
+        "body": REVIEW_MARKER + "\n\nEarlier.",
+        "user": {"login": login, "type": "Bot"},
+        "html_url": f"https://x/{review_id}",
+    }
+
+
+def test_the_last_reviewed_head_is_the_commit_of_the_latest_argus_review() -> None:
+    reviews = [
+        argus_review(1, "a" * 40),
+        argus_review(2, "b" * 40, login="someone-else[bot]"),
+        argus_review(3, "c" * 40),
+        {
+            "id": 4,
+            "commit_id": "d" * 40,
+            "body": "LGTM",
+            "user": {"login": "hamse", "type": "User"},
+        },
+    ]
+
+    assert last_reviewed_head(reviews, "argus[bot]") == "c" * 40
+
+
+def test_with_no_earlier_argus_review_or_no_identity_there_is_no_last_head() -> None:
+    assert last_reviewed_head([argus_review(1, "a" * 40)], "") is None
+    assert last_reviewed_head([], "argus[bot]") is None
+
+
+def test_an_incremental_review_says_what_it_covered() -> None:
+    increment = Increment(since_sha="b" * 40, diff_text="", files=[])
+    ctx = context().model_copy(update={"increment": increment})
+
+    body = build_review(result([finding()]), ctx)["body"]
+
+    assert f"Reviewed the changes since `{'b' * 7}`" in body

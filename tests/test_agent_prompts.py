@@ -8,7 +8,7 @@ from argus.agent.prompts import (
     prompts_digest,
     verifier_user_prompt,
 )
-from argus.domain.models import ChangedFile, Finding, PRInfo, ReviewContext
+from argus.domain.models import ChangedFile, Finding, Increment, PRInfo, ReviewContext
 
 FIXTURES = Path(__file__).parent / "fixtures" / "diffs"
 
@@ -257,3 +257,17 @@ def test_a_diff_cannot_close_its_own_fence() -> None:
 
     assert "````diff\n" + diff in text
     assert text.rstrip().endswith("````")
+
+
+def test_a_re_review_shows_only_the_increment_and_says_so() -> None:
+    increment = Increment(
+        since_sha="b" * 40,
+        diff_text="diff --git a/pkg/fix.py b/pkg/fix.py\n+fixed\n",
+        files=[ChangedFile(path="pkg/fix.py", status="modified")],
+    )
+    text = lead_user_prompt(context().model_copy(update={"increment": increment}))
+
+    assert "already reviewed" in text and "b" * 7 in text
+    assert "pkg/fix.py (modified)" in text
+    assert "+fixed" in text
+    assert "pkg/module.py" not in text  # the rest of the pull request was reviewed before

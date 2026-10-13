@@ -12,7 +12,7 @@ from pathlib import Path
 
 from argus.context.diff import DIFF_SIZE_CAP, cap_diff, parse_diff, split_ignored
 from argus.domain.errors import GitError
-from argus.domain.models import ReviewContext
+from argus.domain.models import Increment, ReviewContext
 
 DEFAULT_BASE = "main"
 
@@ -35,6 +35,37 @@ def local_diff(repo: Path, base: str = DEFAULT_BASE) -> str:
     section rather than a delete and an add.
     """
     merge_base = run_git(repo, "merge-base", "--end-of-options", base, "HEAD")
+    return _diff(repo, merge_base)
+
+
+def increment_since(
+    repo: Path,
+    since: str,
+    head: str,
+    max_bytes: int = DIFF_SIZE_CAP,
+    ignore: Sequence[str] = (),
+) -> Increment | None:
+    """What changed from `since` to `head`, or None when that is not a clean step forward.
+
+    `since` must be an ancestor of `head`: after a force-push, or when the
+    reviewed commit is not in this clone, there is no meaningful increment
+    and the caller reviews the whole pull request instead.
+    """
+    try:
+        run_git(repo, "merge-base", "--is-ancestor", "--end-of-options", since, head)
+    except GitError:
+        return None
+    files, _ = split_ignored(parse_diff(_diff(repo, since, head)), ignore)
+    diff_text, truncated = cap_diff(files, max_bytes)
+    return Increment(
+        since_sha=since,
+        diff_text=diff_text,
+        files=[f.to_changed_file() for f in files],
+        truncated_files=truncated,
+    )
+
+
+def _diff(repo: Path, *revisions: str) -> str:
     return run_git(
         repo,
         # Pin the output shape so a user's diff.noprefix, diff.mnemonicPrefix,
@@ -47,7 +78,7 @@ def local_diff(repo: Path, base: str = DEFAULT_BASE) -> str:
         "--src-prefix=a/",
         "--dst-prefix=b/",
         "-M",
-        merge_base,
+        *revisions,
         strip=False,
     )
 

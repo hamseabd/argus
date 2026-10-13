@@ -23,6 +23,7 @@ from argus.domain.models import (
     SEVERITY_ORDER,
     Category,
     Finding,
+    Increment,
     KnownFinding,
     ReviewContext,
     ReviewResult,
@@ -72,7 +73,7 @@ def build_review(result: ReviewResult, context: ReviewContext) -> dict[str, Any]
     return {
         "commit_id": context.pr.head_sha,
         "event": REVIEW_EVENT,
-        "body": _body(result, in_body, context.ignored_files),
+        "body": _body(result, in_body, context.ignored_files, context.increment),
         "comments": comments,
     }
 
@@ -120,6 +121,22 @@ def known_findings_from(
             _body_findings(str(review.get("body") or ""), str(review.get("html_url") or ""))
         )
     return known
+
+
+def last_reviewed_head(reviews: Iterable[dict[str, Any]], reviewer_login: str) -> str | None:
+    """The head commit the latest Argus review covered, or None if Argus has not reviewed yet.
+
+    GitHub records the commit each review was posted against as `commit_id`;
+    the same identity rule as known_findings_from decides which reviews count.
+    """
+    if not reviewer_login:
+        return None
+    heads = [
+        str(r["commit_id"])
+        for r in reviews
+        if r.get("commit_id") and _is_argus_review(r, reviewer_login)
+    ]
+    return heads[-1] if heads else None
 
 
 def _is_argus_review(review: dict[str, Any], reviewer_login: str) -> bool:
@@ -187,8 +204,18 @@ def _comment(finding: Finding, lines: frozenset[int], verdict: Verdict | None) -
     return comment
 
 
-def _body(result: ReviewResult, in_body: list[Finding], ignored: list[str]) -> str:
+def _body(
+    result: ReviewResult,
+    in_body: list[Finding],
+    ignored: list[str],
+    increment: Increment | None = None,
+) -> str:
     parts = [REVIEW_MARKER, result.review.summary.strip(), render_counts(result.review.findings)]
+    if increment is not None:
+        parts.append(
+            f"Reviewed the changes since `{increment.since_sha[:7]}`, "
+            "the commit Argus last reviewed; earlier findings stand as posted."
+        )
     if ignored:
         # Said on the pull request, not only in the log: a reader should see
         # what the review did not cover, whatever the file was named.

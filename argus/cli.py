@@ -4,7 +4,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, Any, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -12,12 +12,12 @@ from pydantic import ValidationError
 from argus import __version__, telemetry, tracing
 from argus.agent.prompts import prompts_digest
 from argus.auth import credential_problem, credential_source
-from argus.context.git import head_sha, local_context, repo_root
+from argus.context.git import head_sha, increment_since, local_context, repo_root
 from argus.context.github import GitHubClient, parse_repo, pr_context, repo_from_remote
 from argus.domain.errors import ArgusError, GitHubError
 from argus.domain.models import SEVERITY_ORDER, Finding, KnownFinding, ReviewContext, ReviewResult
 from argus.pipeline import run_review
-from argus.report.github_review import build_review, known_findings_from
+from argus.report.github_review import build_review, known_findings_from, last_reviewed_head
 from argus.report.markdown import render_report
 from argus.report.summary import render_summary
 from argus.settings import Settings
@@ -89,7 +89,20 @@ def review(
         bool,
         typer.Option(
             "--include-known",
-            help="Report findings an earlier Argus review already posted on the pull request.",
+            help=(
+                "Report findings an earlier Argus review already posted on the pull request. "
+                "Implies --full."
+            ),
+        ),
+    ] = False,
+    full: Annotated[
+        bool,
+        typer.Option(
+            "--full",
+            help=(
+                "Review the whole pull request even if Argus reviewed it before; by default "
+                "a re-review covers only the commits since the last one."
+            ),
         ),
     ] = False,
     summary_path: Annotated[
@@ -154,13 +167,10 @@ def review(
                 )
                 _warn_on_head_mismatch(context)
                 if not include_known:
-                    known = _known_findings(
-                        target.client,
-                        target.owner,
-                        target.repo,
-                        target.number,
-                        settings.reviewer_login,
-                    )
+                    reviews = _earlier_reviews(target, settings.reviewer_login)
+                    known = _known_findings(target, settings.reviewer_login, reviews)
+                    if not full:
+                        context = _narrow_to_increment(context, reviews, settings, patterns)
             if not context.files and not context.diff_text.strip():
                 _fail(_nothing_to_review(context))
             result = asyncio.run(
@@ -208,8 +218,16 @@ def gate_tripped(findings: list[Finding], fail_on: str) -> bool:
     return any(f.status != "rejected" and SEVERITY_ORDER[f.severity] <= threshold for f in findings)
 
 
+def _earlier_reviews(target: PRTarget, reviewer_login: str) -> list[dict[str, Any]]:
+    """The pull request's reviews, fetched only when there is an identity to trust in them."""
+    if not reviewer_login:
+        telemetry.get_logger().info("known_findings_skipped", reason="no_reviewer_login")
+        return []
+    return target.client.pr_reviews(target.owner, target.repo, target.number)
+
+
 def _known_findings(
-    client: GitHubClient, owner: str, repo: str, number: int, reviewer_login: str
+    target: PRTarget, reviewer_login: str, reviews: list[dict[str, Any]]
 ) -> list[KnownFinding]:
     """What earlier Argus reviews already posted on the pull request.
 
@@ -217,15 +235,49 @@ def _known_findings(
     fetched and every finding is reported; the workflow sets it from the app.
     """
     if not reviewer_login:
-        telemetry.get_logger().info("known_findings_skipped", reason="no_reviewer_login")
         return []
     known = known_findings_from(
-        client.pr_reviews(owner, repo, number),
-        client.pr_review_comments(owner, repo, number),
+        reviews,
+        target.client.pr_review_comments(target.owner, target.repo, target.number),
         reviewer_login,
     )
     telemetry.get_logger().info("known_findings", count=len(known), reviewer=reviewer_login)
     return known
+
+
+def _narrow_to_increment(
+    context: ReviewContext,
+    reviews: list[dict[str, Any]],
+    settings: Settings,
+    patterns: tuple[str, ...],
+) -> ReviewContext:
+    """The context of a re-review: only what changed since the head Argus last reviewed.
+
+    The same head again exits cleanly without a query. A reviewed commit that
+    is no longer an ancestor of the head (a force-push) leaves the whole pull
+    request to review.
+    """
+    since = last_reviewed_head(reviews, settings.reviewer_login)
+    if since is None or context.pr is None:
+        return context
+    log = telemetry.get_logger()
+    head = context.pr.head_sha
+    if since == head:
+        log.info("already_reviewed", head=head)
+        typer.echo(f"argus: already reviewed at {head[:7]}; nothing new to review")
+        raise typer.Exit(0)
+    increment = increment_since(
+        context.repo_root, since, head, settings.diff_size_cap, ignore=patterns
+    )
+    if increment is None:
+        log.warning("increment_unavailable", since=since, head=head)
+        return context
+    if not increment.files:
+        log.info("nothing_new", since=since, head=head)
+        typer.echo(f"argus: nothing reviewable changed since {since[:7]}")
+        raise typer.Exit(0)
+    log.info("incremental_review", since=since, head=head, files=len(increment.files))
+    return context.model_copy(update={"increment": increment})
 
 
 def _check_credentials() -> None:
