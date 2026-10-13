@@ -114,3 +114,4 @@ def test_every_finding_is_verified_unless_a_floor_is_set(monkeypatch) -> None:
     assert Settings(_env_file=None).verify_min_severity == "low"
     monkeypatch.setenv("ARGUS_VERIFY_MIN_SEVERITY", "high")
     assert Settings(_env_file=None).verify_min_severity == "high"
+    assert Settings(_env_file=None).run_config("0" * 12).verify_min_severity == "high"

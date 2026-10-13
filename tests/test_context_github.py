@@ -320,3 +320,36 @@ def test_any_other_diff_failure_is_still_an_error(tmp_path: Path) -> None:
 
     with pytest.raises(GitHubError, match="500"):
         pr_context(client(), "o", "r", 7, tmp_path)
+
+
+@respx.mock
+def test_a_406_with_no_base_commit_to_diff_from_is_still_the_api_error(tmp_path: Path) -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7", headers={"Accept": "application/vnd.github.diff"}).mock(
+        return_value=httpx.Response(406, text="too large")
+    )
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(return_value=httpx.Response(200, json=PR_JSON))
+
+    with pytest.raises(GitHubError, match="406") as info:
+        pr_context(client(), "o", "r", 7, tmp_path)
+
+    assert "checkout" not in str(info.value)
+
+
+@respx.mock
+def test_a_406_the_checkout_cannot_diff_names_both_failures(checkout) -> None:
+    root, _, head = checkout
+    respx.get(f"{API}/repos/o/r/pulls/7", headers={"Accept": "application/vnd.github.diff"}).mock(
+        return_value=httpx.Response(406, text="too large")
+    )
+    missing = {
+        **PR_JSON,
+        "base": {"ref": "main", "sha": "f" * 40},
+        "head": {"ref": "f", "sha": head},
+    }
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(return_value=httpx.Response(200, json=missing))
+
+    with pytest.raises(GitHubError, match="406") as info:
+        pr_context(client(), "o", "r", 7, root)
+
+    assert "too large" in str(info.value)
+    assert "local checkout could not diff it either" in str(info.value)

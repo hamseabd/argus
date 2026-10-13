@@ -284,7 +284,7 @@ class RunConfig(_Model):
     verifier_max_turns: int
     verifier_max_budget_usd: float
     verify_concurrency: int
-    verify_min_severity: str = "low"
+    verify_min_severity: Severity = "low"
     diff_size_cap: int
     fingerprint: str = Field(
         default="",
