@@ -45,6 +45,7 @@ REVIEW_EVENT = "COMMENT"
 _SEVERITIES = "|".join(s.upper() for s in SEVERITY_ORDER)
 _INLINE_TITLE = re.compile(
     rf"^\*\*\[(?P<severity>{_SEVERITIES})\] (?P<title>.+?)\*\* · (?P<category>\w+) · "
+    r"(?:(?P<status>\w+) · )?"
 )
 """The first line finding_body() writes: **[SEVERITY] title** · category · status · confidence.
 
@@ -73,7 +74,9 @@ def build_review(result: ReviewResult, context: ReviewContext) -> dict[str, Any]
     return {
         "commit_id": context.pr.head_sha,
         "event": REVIEW_EVENT,
-        "body": _body(result, in_body, context.ignored_files, context.increment),
+        "body": _body(
+            result, in_body, context.ignored_files, context.increment, rate=bool(comments)
+        ),
         "comments": comments,
     }
 
@@ -98,7 +101,7 @@ def known_findings_from(
     by_review: dict[Any, list[dict[str, Any]]] = {r.get("id"): [] for r in argus_reviews}
     for comment in comments:
         review_id = comment.get("pull_request_review_id")
-        if review_id in by_review and _posted_by(comment.get("user"), reviewer_login):
+        if review_id in by_review and posted_by(comment.get("user"), reviewer_login):
             by_review[review_id].append(comment)
     known: list[KnownFinding] = []
     for review in argus_reviews:
@@ -139,12 +142,29 @@ def last_reviewed_head(reviews: Iterable[dict[str, Any]], reviewer_login: str) -
     return heads[-1] if heads else None
 
 
+def inline_header(body: str) -> dict[str, str] | None:
+    """The severity, title, category, and status of an inline finding comment, or None.
+
+    Severity is returned lower-case, as the domain spells it.
+    """
+    match = _INLINE_TITLE.match(body)
+    if match is None:
+        return None
+    return {
+        "severity": match["severity"].lower(),
+        "title": match["title"],
+        "category": match["category"],
+        "status": match["status"] or "",
+    }
+
+
 def _is_argus_review(review: dict[str, Any], reviewer_login: str) -> bool:
     body = str(review.get("body") or "").lstrip()
-    return body.startswith(REVIEW_MARKER) and _posted_by(review.get("user"), reviewer_login)
+    return body.startswith(REVIEW_MARKER) and posted_by(review.get("user"), reviewer_login)
 
 
-def _posted_by(user: Any, reviewer_login: str) -> bool:
+def posted_by(user: Any, reviewer_login: str) -> bool:
+    """Whether a GitHub user object is the bot account Argus posts as."""
     return (
         isinstance(user, dict)
         and user.get("type") == "Bot"
@@ -209,6 +229,7 @@ def _body(
     in_body: list[Finding],
     ignored: list[str],
     increment: Increment | None = None,
+    rate: bool = False,
 ) -> str:
     parts = [REVIEW_MARKER, result.review.summary.strip(), render_counts(result.review.findings)]
     if increment is not None:
@@ -227,6 +248,9 @@ def _body(
         parts.extend(render_finding(f, heading="###", verdict=verdicts.get(f.id)) for f in in_body)
     if rejected := render_rejected(result):
         parts.append(rejected)
+    if rate:
+        # The reactions are the measure on real pull requests: `argus feedback` reads them.
+        parts.append("React 👍 or 👎 on a finding to say whether it was worth raising.")
     parts.append("---")
     parts.append(render_footer(result))
     return "\n\n".join(parts) + "\n"

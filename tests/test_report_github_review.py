@@ -359,3 +359,15 @@ def test_an_incremental_review_says_what_it_covered() -> None:
     body = build_review(result([finding()]), ctx)["body"]
 
     assert f"Reviewed the changes since `{'b' * 7}`" in body
+
+
+def test_the_review_asks_readers_to_rate_the_inline_findings() -> None:
+    body = build_review(result([finding()]), context())["body"]
+
+    assert "React 👍 or 👎 on a finding" in body
+
+
+def test_a_review_with_no_inline_finding_asks_for_nothing() -> None:
+    body = build_review(result([]), context())["body"]
+
+    assert "React" not in body

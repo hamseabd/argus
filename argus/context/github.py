@@ -79,9 +79,23 @@ class GitHubClient:
         """Every inline review comment on the pull request, as the API returns them."""
         return self._paginate(f"{_pull(owner, repo, number)}/comments")
 
-    def _paginate(self, url: str | None) -> list[dict[str, Any]]:
+    def repo_review_comments(
+        self, owner: str, repo: str, since: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Every inline review comment in the repository, oldest first, optionally since a time.
+
+        Each carries its reactions rollup, which is what `argus feedback` reads.
+        """
+        params: dict[str, Any] = {"sort": "created", "direction": "asc"}
+        if since:
+            params["since"] = since
+        return self._paginate(f"/repos/{owner}/{repo}/pulls/comments", params)
+
+    def _paginate(
+        self, url: str | None, extra: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
-        params: dict[str, Any] | None = {"per_page": _PAGE_SIZE}
+        params: dict[str, Any] | None = {"per_page": _PAGE_SIZE, **(extra or {})}
         while url:
             response = self._request("GET", url, params=params)
             items.extend(response.json())
