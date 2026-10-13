@@ -284,3 +284,11 @@ def test_the_pr_head_checkout_leaves_no_token_in_its_git_config() -> None:
         if "actions/checkout@" in s.get("uses", "") and s.get("with", {}).get("path") == "target"
     )
     assert target["with"]["persist-credentials"] is False
+
+
+def test_three_trials_of_both_modes_are_refused_before_spending_quota() -> None:
+    # The job's six-hour cap cannot hold them; refuse up front, not partway through.
+    guard = steps("eval.yml", "eval")[0]
+
+    assert guard["if"] == "inputs.mode == 'both' && inputs.trials == '3'"
+    assert "exit 1" in guard["run"]

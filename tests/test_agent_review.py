@@ -281,3 +281,18 @@ def test_the_answer_hold_limit_setting_reaches_the_lead_s_hooks(tmp_path: Path) 
 
     assert decisions == [True, False, False]
     assert outcome.metrics.answers_held == 1
+
+
+def test_past_the_review_limit_the_least_confident_of_one_severity_are_dropped(
+    tmp_path: Path,
+) -> None:
+    recorder = Recorder(result(TRIAGE))
+    sure = [
+        ("quality", {**RAW_FINDING, "severity": "low", "confidence": 0.9, "line": n})
+        for n in range(1, 26)
+    ]
+    unsure = [("quality", {**RAW_FINDING, "severity": "low", "confidence": 0.2, "line": 30})]
+
+    outcome = asyncio.run(reviewer(recorder, *unsure, *sure).review(context(tmp_path)))
+
+    assert all(f.confidence == 0.9 for f in outcome.value.findings)

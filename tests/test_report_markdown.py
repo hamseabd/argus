@@ -280,3 +280,9 @@ def test_an_inconclusive_verification_says_so_on_the_finding() -> None:
     text = render_report(result([finding(status="unverified")], verdicts))
 
     assert "**Verifier, inconclusive:** Whether name can be attacker-controlled" in text
+
+
+def test_a_finding_says_which_specialist_found_it() -> None:
+    text = render_report(result([finding(reported_by="security")]))
+
+    assert "confidence 0.95 · found by security" in text

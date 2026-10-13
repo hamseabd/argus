@@ -706,3 +706,32 @@ def test_a_finding_the_lead_records_itself_is_attributed_to_the_lead(tmp_path) -
     )
 
     assert collector.findings()[0].reported_by == LEAD_AGENT
+
+
+def test_a_refused_report_attributes_nothing(tmp_path) -> None:
+    collector = FindingCollector(tmp_path)
+    state = HookState(collector=collector)
+    refused = {
+        "content": [{"type": "text", "text": "Not recorded: line: must be at least 1"}],
+        "is_error": True,
+    }
+
+    asyncio.run(
+        audit_tool_call(state)(
+            hook_input(
+                REPORT_FINDING_TOOL_NAME, "PostToolUse", agent_id="a-q", tool_response=refused
+            ),
+            None,
+            {"signal": None},
+        )
+    )
+
+    assert collector.findings() == []
+
+
+def test_the_leads_refusals_point_it_at_the_triage() -> None:
+    state = HookState(read_budget=0)
+    out = asyncio.run(limit_lead_reading(state)(hook_input("Read"), None, {"signal": None}))
+
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Triage" in reason and "Review" not in reason

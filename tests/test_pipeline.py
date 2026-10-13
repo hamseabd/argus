@@ -442,3 +442,16 @@ def test_findings_below_the_verify_floor_are_reported_unverified_without_a_query
         "correctness-1": "confirmed",
         "correctness-2": "unverified",
     }
+
+
+def test_a_failed_verification_logs_its_error_without_a_token(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    leaked = ReviewProtocolError("bad verdict: reasoning sk-ant-oat01-" + "a" * 40, 0.1)
+    agent = FakeAgent(review, {"correctness-1": leaked})
+
+    asyncio.run(run_review(context(tmp_path), agent))
+
+    assert "sk-ant-oat01-aaaa" not in stream.getvalue()
+    assert "[redacted]" in stream.getvalue()

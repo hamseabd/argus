@@ -16,6 +16,7 @@ and attributes each id it sees answered (see argus.agent.hooks).
 """
 
 import re
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -76,15 +77,16 @@ class FindingCollector:
 
     def _check_location(self, finding: Finding) -> None:
         target = (self._root / finding.file).resolve()
-        if not target.is_relative_to(self._root):
+        # .git too, as the read hook refuses it: a checkout can keep a token there.
+        if not target.is_relative_to(self._root) or ".git" in target.relative_to(self._root).parts:
             raise ValueError(f"{finding.file} is outside the repository")
         if not target.is_file():
             raise ValueError(
                 f"{finding.file} does not exist; use the repository-relative path from the diff"
             )
-        with target.open(encoding="utf-8", errors="replace") as handle:
-            lines = sum(1 for _ in handle)
         last = finding.end_line or finding.line
+        with target.open(encoding="utf-8", errors="replace") as handle:
+            lines = sum(1 for _ in islice(handle, last))  # enough to know the range fits
         if last > lines:
             raise ValueError(
                 f"{finding.file} has {lines} lines; line {last} is past its end. "
