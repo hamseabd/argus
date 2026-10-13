@@ -176,25 +176,40 @@ def confine_reads(state: HookState, repo_root: Path) -> Hook:
 def _outside(root: Path, tool: str, tool_input: dict[str, Any]) -> str | None:
     """The offending path of a Read, Grep, or Glob call, or None when it stays inside root."""
     if tool == "Read":
-        candidates = [tool_input.get("file_path")]
-        if not candidates[0]:
+        raw = tool_input.get("file_path")
+        if not raw:
             return "a read with no file_path"
-    else:
-        candidates = [tool_input.get("path") or "."]
-        if tool == "Glob":
-            # A glob pattern can climb out on its own: an absolute or ../ pattern.
-            pattern = str(tool_input.get("pattern") or "")
-            if pattern.startswith(("/", "~")) or ".." in Path(pattern).parts:
-                return pattern
-    for raw in candidates:
-        if not _inside(root, str(raw)):
-            return str(raw)
+        return None if _inside(root, str(raw)) else str(raw)
+    path = str(tool_input.get("path") or ".")
+    if not _inside(root, path):
+        return path
+    # A glob can climb out or into .git on its own, whatever path it starts from:
+    # Glob's pattern and Grep's glob filter are checked as patterns.
+    pattern_key = "pattern" if tool == "Glob" else "glob"
+    pattern = str(tool_input.get(pattern_key) or "")
+    if pattern and _escaping_pattern(pattern):
+        return pattern
     return None
 
 
+def _escaping_pattern(pattern: str) -> bool:
+    """An absolute, home, parent, .git, or brace pattern: any of them can leave the repository.
+
+    Braces are refused outright because `{..,x}` expands to a parent directory
+    that a check of the literal parts cannot see.
+    """
+    if pattern.startswith(("/", "~")) or "{" in pattern:
+        return True
+    parts = pattern.replace("\\", "/").split("/")
+    return ".." in parts or ".git" in parts
+
+
 def _inside(root: Path, raw: str) -> bool:
-    path = Path(raw).expanduser()
-    resolved = (path if path.is_absolute() else root / path).resolve()
+    try:
+        path = Path(raw).expanduser()
+        resolved = (path if path.is_absolute() else root / path).resolve()
+    except (RuntimeError, OSError):  # an unknown ~user, a symlink loop: refuse, never guess
+        return False
     if not resolved.is_relative_to(root):
         return False
     return ".git" not in resolved.relative_to(root).parts
