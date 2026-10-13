@@ -14,6 +14,8 @@ When a TraceRecorder is attached, the same hooks feed it the start, end,
 and denial of every tool call.
 """
 
+import fnmatch
+import os
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -140,14 +142,19 @@ def confine_reads(state: HookState, repo_root: Path) -> Hook:
     request. Paths are resolved with symlinks followed, so a link inside the
     repository that points out of it is refused too. .git is refused because
     a checkout can keep a token in its config.
+
+    A search reaches files by pattern, not by a path that can be resolved, so
+    the repository is scanned once for links that lead out of it or into .git,
+    and a Grep or Glob whose scope holds one is refused whatever its pattern.
     """
     root = repo_root.resolve()
+    links = escaping_links(root)
 
     async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
         name = data.get("tool_name", "")
         if name not in PATH_TOOLS:
             return {}
-        problem = _outside(root, name, data.get("tool_input") or {})
+        problem = _outside(root, name, data.get("tool_input") or {}, links)
         if problem is None:
             return {}
         state.denied += 1
@@ -163,7 +170,9 @@ def confine_reads(state: HookState, repo_root: Path) -> Hook:
     return hook
 
 
-def _outside(root: Path, tool: str, tool_input: dict[str, Any]) -> str | None:
+def _outside(
+    root: Path, tool: str, tool_input: dict[str, Any], links: Sequence[Path] = ()
+) -> str | None:
     """The offending path of a Read, Grep, or Glob call, or None when it stays inside root."""
     if tool == "Read":
         raw = tool_input.get("file_path")
@@ -173,6 +182,10 @@ def _outside(root: Path, tool: str, tool_input: dict[str, Any]) -> str | None:
     path = str(tool_input.get("path") or ".")
     if not _inside(root, path):
         return path
+    scope = (root / Path(path).expanduser()).resolve()
+    for link in links:
+        if (root / link).is_relative_to(scope):
+            return f"{path} (it holds {link.as_posix()}, a link that leads out of it)"
     # A glob can climb out or into .git on its own, whatever path it starts from:
     # Glob's pattern and Grep's glob filter are checked as patterns.
     pattern_key = "pattern" if tool == "Glob" else "glob"
@@ -182,16 +195,34 @@ def _outside(root: Path, tool: str, tool_input: dict[str, Any]) -> str | None:
     return None
 
 
-def _escaping_pattern(pattern: str) -> bool:
-    """An absolute, home, parent, .git, or brace pattern: any of them can leave the repository.
+def escaping_links(root: Path) -> list[Path]:
+    """Symlinks in the repository that resolve outside it or into its .git, relative to root."""
+    found: list[Path] = []
+    for directory, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for name in [*dirnames, *filenames]:
+            entry = Path(directory) / name
+            if entry.is_symlink() and not _inside(root, str(entry)):
+                found.append(entry.relative_to(root))
+    return found
 
-    Braces are refused outright because `{..,x}` expands to a parent directory
-    that a check of the literal parts cannot see.
+
+def _escaping_pattern(pattern: str) -> bool:
+    """A pattern that can leave the repository or enter its .git on its own.
+
+    Absolute, home, and brace patterns are refused outright (`{..,x}` expands
+    to a parent the literal parts cannot show), and so is any part that is
+    `..` or that could match `.git`, such as `.gi?` or `[.]git`. A bare `*` or
+    `**` is allowed: the search tools skip hidden directories, and the
+    checkout keeps no credential in .git.
     """
     if pattern.startswith(("/", "~")) or "{" in pattern:
         return True
     parts = pattern.replace("\\", "/").split("/")
-    return ".." in parts or ".git" in parts
+    return any(
+        part == ".." or (part not in ("*", "**") and fnmatch.fnmatchcase(".git", part))
+        for part in parts
+    )
 
 
 def _inside(root: Path, raw: str) -> bool:
