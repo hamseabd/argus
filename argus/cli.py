@@ -223,7 +223,12 @@ def gate_tripped(findings: list[Finding], fail_on: str) -> bool:
 def _earlier_reviews(target: PRTarget, reviewer_login: str) -> list[dict[str, Any]]:
     """The pull request's reviews, fetched only when there is an identity to trust in them."""
     if not reviewer_login:
-        telemetry.get_logger().info("known_findings_skipped", reason="no_reviewer_login")
+        # Both read these reviews: without them nothing is known and nothing is incremental.
+        telemetry.get_logger().info(
+            "earlier_reviews_skipped",
+            reason="no_reviewer_login",
+            skips=["known_findings", "incremental_review"],
+        )
         return []
     return target.client.pr_reviews(target.owner, target.repo, target.number)
 
