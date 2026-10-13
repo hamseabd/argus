@@ -69,6 +69,9 @@ def test_reads_inside_the_repository_pass(repo: Path, tool: str, tool_input: dic
         ("Glob", {"pattern": ".git/**"}),
         ("Glob", {"pattern": "**/.git/config"}),
         ("Glob", {"pattern": "{..,x}/**"}),
+        ("Glob", {"pattern": ".gi[t]/**"}),
+        ("Grep", {"pattern": "token", "glob": ".gi?/config"}),
+        ("Grep", {"pattern": "token", "glob": "?git/config"}),
         ("Grep", {"pattern": "token", "glob": ".git/config"}),
         ("Grep", {"pattern": "x", "glob": "../*"}),
         ("Read", {"file_path": "~nosuchuser-argus/x"}),
@@ -110,3 +113,33 @@ def test_the_confinement_hook_runs_on_every_read_tool(repo: Path) -> None:
 
     confining = next(m for m in matchers if "confine_reads" in m.hooks[0].__qualname__)
     assert set((confining.matcher or "").split("|")) == {"Read", "Grep", "Glob"}
+
+
+def test_a_search_whose_scope_holds_a_symlink_out_of_the_repository_is_refused(
+    repo: Path,
+) -> None:
+    # A glob can walk into a linked directory by pattern alone ("docs/**"), so
+    # any search whose scope holds such a link is refused, whatever its pattern.
+    (repo / "docs").symlink_to(repo.parent)
+
+    for tool, tool_input in [
+        ("Glob", {"pattern": "docs/**"}),
+        ("Grep", {"pattern": "sk-ant"}),
+        ("Grep", {"pattern": "x", "path": "."}),
+    ]:
+        out = call(HookState(), repo, tool, tool_input)
+        assert denied(out), (tool, tool_input)
+        assert "docs" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_a_search_scoped_away_from_the_escaping_symlink_still_runs(repo: Path) -> None:
+    (repo / "docs").symlink_to(repo.parent)
+
+    assert call(HookState(), repo, "Grep", {"pattern": "x", "path": "app"}) == {}
+    assert call(HookState(), repo, "Read", {"file_path": "app/main.py"}) == {}
+
+
+def test_a_symlink_that_stays_inside_the_repository_does_not_block_searches(repo: Path) -> None:
+    (repo / "alias").symlink_to(repo / "app")
+
+    assert call(HookState(), repo, "Glob", {"pattern": "**/*.py"}) == {}

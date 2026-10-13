@@ -124,3 +124,20 @@ def test_a_placeholder_finding_is_refused_like_the_schema_would(repo: Path) -> N
     # collector applies the same length floor itself.
     with pytest.raises(ValueError, match="evidence"):
         FindingCollector(repo).add({**RAW, "evidence": "see code"})
+
+
+def test_a_finding_in_the_git_directory_is_refused(repo: Path) -> None:
+    (repo / ".git").mkdir()
+    (repo / ".git" / "config").write_text("[core]\n")
+    (repo / "app" / "cfg").symlink_to(repo / ".git" / "config")
+
+    for path in (".git/config", "app/cfg"):
+        with pytest.raises(ValueError, match="outside the repository"):
+            FindingCollector(repo).add({**RAW, "file": path, "line": 1, "end_line": None})
+
+
+def test_counting_lines_stops_once_the_finding_is_known_to_fit(repo: Path) -> None:
+    big = repo / "app" / "big.py"
+    big.write_text("x\n" * 100_000)
+
+    assert FindingCollector(repo).add({**RAW, "file": "app/big.py", "line": 3, "end_line": 4})

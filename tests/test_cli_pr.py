@@ -449,3 +449,38 @@ def test_with_a_gate_an_already_reviewed_head_is_still_reviewed(
     assert result.exit_code == 0, result.output
     assert "already reviewed" not in result.output
     assert "context" in stubbed
+
+
+def test_a_push_that_changed_only_ignored_files_is_not_reviewed(
+    stubbed: dict, increments: list, monkeypatch
+) -> None:
+    stubbed["reviews"] = [earlier_review("b" * 40)]
+    monkeypatch.setattr(
+        cli,
+        "increment_since",
+        lambda repo, since, head, max_bytes=0, ignore=(): Increment(
+            since_sha=since, diff_text="", files=[]
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
+
+    assert result.exit_code == 0, result.output
+    assert "nothing reviewable changed" in result.output
+    assert "context" not in stubbed
+
+
+def test_without_an_identity_the_log_names_both_things_skipped() -> None:
+    import io
+    import json
+
+    from argus import telemetry
+
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+
+    assert cli._earlier_reviews(cli.PRTarget(FakeGitHub({}), "o", "r", 7), "") == []
+
+    event = json.loads(stream.getvalue().splitlines()[-1])
+    assert event["event"] == "earlier_reviews_skipped"
+    assert event["skips"] == ["known_findings", "incremental_review"]
