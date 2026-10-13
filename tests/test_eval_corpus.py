@@ -17,11 +17,14 @@ SEEDED_BUGS = {
     "leaked_file_handle",
     "none_deref",
     "removed_auth_check",
+    "cross_file_contract",
+    "js_async_foreach",
+    "truncated_diff_bug",
 }
 CLEAN_CONTROLS = {"clean_rename_refactor", "clean_docs_only", "clean_correct_fix"}
 
 
-def test_the_corpus_holds_seven_seeded_bugs_and_three_clean_controls() -> None:
+def test_the_corpus_holds_ten_seeded_bugs_and_three_clean_controls() -> None:
     names = {case.name for case in CASES}
 
     assert names == SEEDED_BUGS | CLEAN_CONTROLS
@@ -85,3 +88,34 @@ def test_the_feature_branch_changes_something_and_every_expected_line_is_in_the_
     for bug in case.expected:
         lines = set(range(bug.line_start, bug.line_end + 1))
         assert lines <= shown.get(bug.file, frozenset()), (case.name, bug)
+
+
+def test_alternate_locations_are_parsed_and_need_not_be_in_the_diff() -> None:
+    (case,) = [c for c in CASES if c.name == "cross_file_contract"]
+    (bug,) = case.expected
+
+    assert bug.file == "app/accounts.py"
+    assert [(loc.file, loc.line_start) for loc in bug.also] == [("app/billing.py", 9)]
+
+
+def test_the_truncation_case_drops_its_buggy_file_from_the_diff_under_its_cap(
+    tmp_path: Path,
+) -> None:
+    (case,) = [c for c in CASES if c.name == "truncated_diff_bug"]
+    repo = build_case_repo(case, tmp_path / "repo")
+
+    capped = local_context(repo, base="main", max_bytes=case.diff_size_cap)
+
+    assert case.expected[0].file in capped.truncated_files
+    assert capped.diff_text.strip(), "something must still be in the diff"
+
+
+def test_a_case_yaml_with_an_unknown_key_is_rejected(tmp_path: Path) -> None:
+    case = tmp_path / "bad"
+    (case / "base").mkdir(parents=True)
+    (case / "seeded").mkdir()
+    (case / "expected.yaml").write_text("[]\n")
+    (case / "case.yaml").write_text("diff_cap: 10\n")
+
+    with pytest.raises(ValueError, match="diff_cap"):
+        load_cases(tmp_path)

@@ -1,11 +1,12 @@
 name: argus-eval
 
-# Scores Argus over the seeded-bug corpus in evals/cases: seven seeded bugs
+# Scores Argus over the seeded-bug corpus in evals/cases: ten seeded bugs
 # and three clean controls, reviewed in verify and no-verify modes, for
 # precision, recall, the clean-control false-positive rate, verifier
 # accuracy, and cost, turns, and latency per review.
 #
-# On demand only: a full run is twenty reviews against the subscription, so
+# On demand only: one trial of both modes is twenty-six reviews against the
+# subscription, so
 # no push or pull request ever starts one. The record (every ReviewResult
 # plus the table) is kept as an artifact and the table goes on the run's
 # summary page; to cite it, read it and commit it under the gitignored
@@ -23,6 +24,12 @@ on:
         default: both
         type: choice
         options: [both, verify, no-verify]
+      trials:
+        description: Passes over the corpus per mode, to see the run-to-run spread
+        required: true
+        default: "1"
+        type: choice
+        options: ["1", "2", "3"]
 
 permissions:
   contents: read
@@ -34,9 +41,16 @@ concurrency:
 jobs:
   eval:
     runs-on: ubuntu-latest
-    # About five minutes a review, twenty reviews for both modes.
-    timeout-minutes: 180
+    # About five minutes a review: twenty-six for one trial of both modes. Three
+    # trials of both modes would outlast GitHub's six-hour cap; run them one mode
+    # at a time.
+    timeout-minutes: 360
     steps:
+      - name: Refuse a run the timeout cannot hold
+        if: inputs.mode == 'both' && inputs.trials == '3'
+        run: |
+          echo "::error::Three trials of both modes outlast the six-hour cap; run one mode at a time."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
@@ -47,11 +61,12 @@ jobs:
         run: |
           args=()
           if [ "$EVAL_MODE" != both ]; then args=(--mode "$EVAL_MODE"); fi
-          uv run python -m evals.run "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          uv run python -m evals.run "${args[@]}" --trials "$EVAL_TRIALS" | tee -a "$GITHUB_STEP_SUMMARY"
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ARGUS_LOG_FORMAT: json
           EVAL_MODE: ${{ inputs.mode }}
+          EVAL_TRIALS: ${{ inputs.trials }}
       - name: Keep the eval record
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

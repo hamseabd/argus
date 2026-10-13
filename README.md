@@ -155,14 +155,15 @@ It runs Argus over a corpus of small repositories with known answers and scores 
 ```bash
 export CLAUDE_CODE_OAUTH_TOKEN=...   # from `claude setup-token`; omitted, the machine login is used
 uv run python -m evals.run           # every case, verify and no-verify; --mode and --case narrow it
+uv run python -m evals.run --trials 3 --mode verify   # three passes, to see the run-to-run spread
 ```
 
 The same run is available on demand as the [`argus-eval`](.github/workflows/eval.yml) workflow (`workflow_dispatch` only; it needs the `CLAUDE_CODE_OAUTH_TOKEN` secret and posts nothing).
-A full run is twenty reviews, ten cases in each mode, one at a time, against the subscription.
+One trial is twenty-six reviews, thirteen cases in each mode, one at a time, against the subscription; `--trials N` repeats the corpus, because one review of a case is one sample and findings vary between runs.
 It writes `evals/results/<date>-<sha>.json`, with every `ReviewResult` and the scores, and the table beside it as `.md`.
 `evals/results/` is gitignored because a record holds raw model output and error text; read one before committing it with `git add -f`.
 
-**The corpus.** Each case under [`evals/cases/`](evals/cases/) is a `base/` snapshot, a `seeded/` snapshot, and an `expected.yaml` listing each seeded bug's file, line range, category, and severity.
+**The corpus.** Each case under [`evals/cases/`](evals/cases/) is a `base/` snapshot, a `seeded/` snapshot, and an `expected.yaml` listing each seeded bug's file, line range, category, and severity, plus any other place it may rightly be reported (`also`), such as the unchanged caller a changed contract breaks. An optional `case.yaml` reviews a case under other settings, such as a smaller diff budget.
 The runner builds the same layout the live test uses, `main` holding the base and a `feature` branch holding the change, in a temporary directory with a neutral name, and reviews it with `run_review` and `SdkReviewAgent` exactly as `argus review --diff --base main` would.
 
 | Case | Seeded change | Category |
@@ -174,17 +175,22 @@ The runner builds the same layout the live test uses, `main` holding the base an
 | `leaked_file_handle` | a file is opened per log without ever being closed | correctness |
 | `none_deref` | a lookup that can return `None` is dereferenced | correctness |
 | `removed_auth_check` | the admin check on delete is removed | security |
+| `cross_file_contract` | a lookup now returns `None` instead of raising; an unchanged caller in another file subscripts it | correctness |
+| `js_async_foreach` | JavaScript: inserts move into `forEach(async ...)`, so the connection closes before any runs | correctness |
+| `truncated_diff_bug` | a type-hint pass drops an empty-input guard in the largest file, which the diff budget leaves out | correctness |
 | `clean_rename_refactor` | functions renamed with every call site | none expected |
 | `clean_docs_only` | docstrings and a README only | none expected |
 | `clean_correct_fix` | `median` fixed to average the two middle values, as its docstring already says | none expected |
 
 **The scoring** ([`evals/score.py`](evals/score.py)).
-A finding matches a seeded bug when it names the same file and category and its line span, at most 15 lines wide, comes within three lines of the bug's.
+A finding matches a seeded bug when it names the same category and its line span, at most 15 lines wide, comes within three lines of one of the bug's locations in the same file.
 A finding counts as reported unless the verifier rejected it, the same rule the report uses.
 Precision and recall are pooled over the corpus; a second finding on an already-matched bug is a duplicate, not a false positive.
 The clean-control false-positive rate is the share of clean controls with any reported finding, over the controls that completed; a crashed control reviewed nothing, so it counts as an error, never as a clean pass.
 Verifier accuracy is right decisions (a real bug confirmed, a false one rejected) over every confirm or reject, and the two wrong outcomes, real bugs rejected and false positives confirmed, are reported separately; a failed verification is not a decision.
 A case whose run fails counts as missing its bugs and keeps what it cost.
+Reported findings are also counted per category, so a specialist whose findings are mostly false positives shows as one.
+With several trials the summary pools them, and the table adds each trial's precision and recall, so a difference between two configurations can be told from the spread.
 Cost, turns, and latency come from the same `ReviewResult` the CLI writes.
 Cost is averaged over every case, failed runs included, because a failed run still spent its quota; turns and latency are averaged over the runs that completed, because a failed run reports neither.
 

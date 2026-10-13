@@ -1,0 +1,8 @@
+# find_account now returns None for a missing account; monthly_charge still subscripts it.
+- file: app/accounts.py
+  line_start: 6
+  line_end: 8
+  category: correctness
+  severity: high
+  also:
+    - {file: app/billing.py, line_start: 9, line_end: 10}

@@ -315,3 +315,100 @@ def test_only_crashed_clean_controls_leave_the_rate_undefined() -> None:
 
     assert summary.clean_controls == 0
     assert summary.clean_control_fp_rate is None
+
+
+# --- alternate locations, categories, trials -------------------------------
+
+CONTRACT = ExpectedBug(
+    file="app/accounts.py",
+    line_start=10,
+    line_end=12,
+    category="correctness",
+    severity="high",
+    also=[{"file": "app/billing.py", "line_start": 10, "line_end": 10}],
+)
+
+
+def test_a_finding_at_an_alternate_location_matches_the_bug() -> None:
+    # A broken contract can be reported where it changed or where a caller breaks.
+    at_caller = finding("c", file="app/billing.py", line=10, category="correctness")
+    at_change = finding("d", file="app/accounts.py", line=11, category="correctness")
+
+    assert matches(at_caller, CONTRACT)
+    assert matches(at_change, CONTRACT)
+    assert not matches(finding("e", file="app/store.py", line=10, category="correctness"), CONTRACT)
+
+
+def test_both_locations_of_one_bug_count_once_and_the_other_as_a_duplicate() -> None:
+    case = bug_case(CONTRACT, name="cross_file_contract")
+    score = score_case(
+        case,
+        result(
+            finding("a", file="app/accounts.py", line=11, category="correctness"),
+            finding("b", file="app/billing.py", line=10, category="correctness"),
+        ),
+    )
+
+    assert (score.true_positives, score.duplicates, score.false_positives) == (1, 1, 0)
+
+
+def test_reported_findings_are_counted_by_category() -> None:
+    score = score_case(
+        bug_case(SQLI),
+        result(
+            finding("a"),
+            finding("b", file="app/other.py", category="quality"),
+            finding("c", file="app/other.py", category="quality"),
+            finding("d", file="app/other.py", category="correctness", status="rejected"),
+        ),
+    )
+
+    assert score.true_positives_by_category == {"security": 1}
+    assert score.false_positives_by_category == {"quality": 2}
+
+
+def test_category_counts_are_pooled_into_the_summary_and_the_markdown() -> None:
+    a = score_case(
+        bug_case(SQLI), result(finding("a"), finding("b", file="x.py", category="quality"))
+    )
+    b = score_case(bug_case(SQLI), result(finding("c", file="y.py", category="quality")))
+
+    summary = summarize([a, b])
+
+    assert summary.by_category == {
+        "security": {"true_positives": 1, "false_positives": 0, "precision": 1.0},
+        "quality": {"true_positives": 0, "false_positives": 2, "precision": 0.0},
+    }
+    table = render_markdown({"verify": [a, b]})
+    assert "| quality | 0 / 2 (0%) |" in table
+
+
+def test_with_several_trials_the_markdown_shows_each_trials_recall_and_precision() -> None:
+    hit = score_case(bug_case(SQLI), result(finding("a")))
+    miss = score_case(bug_case(SQLI), result())
+    scores = [
+        hit.model_copy(update={"trial": 1}),
+        miss.model_copy(update={"trial": 2}),
+        hit.model_copy(update={"trial": 3}),
+    ]
+
+    table = render_markdown({"verify": scores})
+
+    assert "| verify | 100% | 67% |" in table  # pooled over every trial
+    assert "verify recall per trial: 100%, 0%, 100%" in table
+    assert "verify precision per trial: 100%, n/a, 100%" in table
+
+
+def test_a_single_trial_adds_no_per_trial_line() -> None:
+    table = render_markdown({"verify": [score_case(bug_case(SQLI), result(finding("a")))]})
+
+    assert "per trial" not in table
+
+
+def test_a_case_that_errored_on_some_trials_sums_the_rest_and_counts_the_errors() -> None:
+    ok = score_case(bug_case(SQLI), result(finding("a")))
+    broken = failed_case(bug_case(SQLI), "boom", 0.1).model_copy(update={"trial": 2})
+
+    table = render_markdown({"verify": [ok, broken]})
+
+    assert "| sqli | 1 / 0 / 1 (1 errored) |" in table

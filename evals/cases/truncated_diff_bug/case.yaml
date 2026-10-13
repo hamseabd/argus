@@ -1,0 +1,3 @@
+# A diff cap small enough that the size budget drops app/reports.py, the largest file
+# and the one with the bug: the reviewer must read it from the omitted-files list.
+diff_size_cap: 1024

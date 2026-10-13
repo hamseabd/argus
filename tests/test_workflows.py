@@ -219,7 +219,7 @@ def test_the_eval_token_is_read_only_and_the_job_has_a_timeout() -> None:
     eval_workflow = load("eval.yml")
 
     assert eval_workflow["permissions"] == {"contents": "read"}
-    assert 0 < eval_workflow["jobs"]["eval"]["timeout-minutes"] <= 240
+    assert 0 < eval_workflow["jobs"]["eval"]["timeout-minutes"] <= 360  # GitHub's job maximum
 
 
 def test_the_eval_uses_only_the_subscription_token_and_keeps_its_record() -> None:
@@ -227,8 +227,16 @@ def test_the_eval_uses_only_the_subscription_token_and_keeps_its_record() -> Non
     run = next(s for s in all_steps if s.get("name") == "Evaluate")
     upload = next(s for s in all_steps if "upload-artifact@" in s.get("uses", ""))
 
-    assert set(run["env"]) == {"CLAUDE_CODE_OAUTH_TOKEN", "ARGUS_LOG_FORMAT", "EVAL_MODE"}
-    assert run["env"]["EVAL_MODE"] == "${{ inputs.mode }}"  # never interpolated into the script
+    assert set(run["env"]) == {
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ARGUS_LOG_FORMAT",
+        "EVAL_MODE",
+        "EVAL_TRIALS",
+    }
+    # Inputs reach the script through the environment, never interpolated into it.
+    assert run["env"]["EVAL_MODE"] == "${{ inputs.mode }}"
+    assert run["env"]["EVAL_TRIALS"] == "${{ inputs.trials }}"
+    assert '--trials "$EVAL_TRIALS"' in run["run"]
     assert run["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
     assert "python -m evals.run" in run["run"]
     assert upload["if"] == "always()"
@@ -252,3 +260,11 @@ def test_the_pr_head_checkout_leaves_no_token_in_its_git_config() -> None:
         if "actions/checkout@" in s.get("uses", "") and s.get("with", {}).get("path") == "target"
     )
     assert target["with"]["persist-credentials"] is False
+
+
+def test_three_trials_of_both_modes_are_refused_before_spending_quota() -> None:
+    # The job's six-hour cap cannot hold them; refuse up front, not partway through.
+    guard = steps("eval.yml", "eval")[0]
+
+    assert guard["if"] == "inputs.mode == 'both' && inputs.trials == '3'"
+    assert "exit 1" in guard["run"]

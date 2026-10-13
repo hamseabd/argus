@@ -1,0 +1,2 @@
+# forEach does not await its async callback: the connection closes before any insert runs.
+- {file: src/sync.js, line_start: 12, line_end: 14, category: correctness, severity: high}

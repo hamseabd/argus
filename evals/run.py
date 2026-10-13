@@ -2,6 +2,7 @@
 
     uv run python -m evals.run                   # every case, verify and no-verify
     uv run python -m evals.run --mode verify --case sqli
+    uv run python -m evals.run --trials 3        # three passes, to see the run-to-run spread
 
 Each case is built into a fresh git repository in a temporary directory with
 a neutral name, reviewed through the same pipeline and SdkReviewAgent the CLI
@@ -28,6 +29,7 @@ from typing import Annotated, Any
 import typer
 
 from argus import telemetry
+from argus.context.diff import DIFF_SIZE_CAP
 from argus.context.git import local_context
 from argus.domain.errors import ArgusError
 from argus.domain.models import ReviewResult
@@ -52,7 +54,7 @@ def result_label(day: date, sha: str) -> str:
 
 
 async def run_case(
-    case: Case, agent: ReviewAgent, *, verify: bool, verify_concurrency: int
+    case: Case, agent: ReviewAgent, *, verify: bool, verify_concurrency: int, trial: int = 1
 ) -> tuple[CaseScore, ReviewResult | None]:
     """Build the case's repository, review it, and score the result.
 
@@ -65,15 +67,17 @@ async def run_case(
         # a name like "sqli" would tell it what to look for.
         try:
             repo = build_case_repo(case, Path(tmp) / "repo")
-            context = local_context(repo, base="main")
+            context = local_context(
+                repo, base="main", max_bytes=case.diff_size_cap or DIFF_SIZE_CAP
+            )
             result = await run_review(
                 context, agent, verify=verify, verify_concurrency=verify_concurrency
             )
         except ArgusError as exc:
             cost = float(exc.cost_usd) if isinstance(exc, PAID_ERRORS) else 0.0
             log.warning("eval_case_failed", case=case.name, error=str(exc), cost_usd=cost)
-            return failed_case(case, str(exc), cost), None
-    score = score_case(case, result)
+            return failed_case(case, str(exc), cost).model_copy(update={"trial": trial}), None
+    score = score_case(case, result).model_copy(update={"trial": trial})
     log.info("eval_case_scored", verify=verify, **score.model_dump())
     return score, result
 
@@ -86,19 +90,30 @@ async def run_eval(
     out_dir: Path,
     label: str,
     verify_concurrency: int = DEFAULT_VERIFY_CONCURRENCY,
+    trials: int = 1,
 ) -> ResultPaths:
-    """Every case in every mode, one at a time; writes <label>.json and <label>.md.
+    """Every case in every mode, trials times over, one at a time; writes <label>.json and .md.
 
     A mode named twice runs once: the corpus costs real quota, and a second
     pass would double the summary while the record kept only the last pass.
+    Trials are the deliberate repeat: one review of a case is one sample, and
+    a model's findings vary between runs, so a difference between two
+    configurations means little until it outlasts that variance. The summary
+    pools every trial; the table adds each trial's precision and recall.
     """
-    record: dict[str, Any] = {"label": label, "modes": {}}
+    if trials < 1:
+        raise ValueError(f"trials must be at least 1, got {trials}")
+    record: dict[str, Any] = {"label": label, "trials": trials, "modes": {}}
     scores_by_mode: dict[str, list[CaseScore]] = {}
     for mode in dict.fromkeys(modes):
         entries = []
-        for case in cases:
+        for trial, case in ((t, c) for t in range(1, trials + 1) for c in cases):
             score, result = await run_case(
-                case, agent, verify=MODES[mode], verify_concurrency=verify_concurrency
+                case,
+                agent,
+                verify=MODES[mode],
+                verify_concurrency=verify_concurrency,
+                trial=trial,
             )
             entries.append(
                 {
@@ -153,6 +168,9 @@ def main(
         list[str] | None, typer.Option("--case", help="Run only this case; repeatable.")
     ] = None,
     out: Annotated[Path, typer.Option("--out", help="Directory for the record.")] = RESULTS_DIR,
+    trials: Annotated[
+        int, typer.Option("--trials", min=1, help="Passes over the corpus per mode. Default: 1.")
+    ] = 1,
 ) -> None:
     """Review every corpus case with the real SDK and write the scored record."""
     from argus.agent.review import SdkReviewAgent  # the SDK loads only for a live run
@@ -176,6 +194,7 @@ def main(
             out_dir=out,
             label=label,
             verify_concurrency=settings.verify_concurrency,
+            trials=trials,
         )
     )
     typer.echo(paths.markdown.read_text(encoding="utf-8"), nl=False)

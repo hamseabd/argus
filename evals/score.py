@@ -20,10 +20,11 @@ Pure functions over domain types, with no SDK imports: the tests run it offline.
 
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from typing import get_args
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from argus.domain.models import Finding, ReviewResult
+from argus.domain.models import Category, Finding, ReviewResult
 from evals.corpus import Case, ExpectedBug
 
 TOLERANCE = 3
@@ -31,6 +32,8 @@ TOLERANCE = 3
 
 MAX_SPAN = 15
 """The widest finding, in lines, that still localizes a bug: about one function."""
+
+_CATEGORY_ORDER = list(get_args(Category))
 
 
 class _Model(BaseModel):
@@ -42,6 +45,7 @@ class CaseScore(_Model):
 
     case: str
     clean: bool
+    trial: int = Field(default=1, ge=1, description="Which pass over the corpus this review was.")
     true_positives: int = 0
     false_positives: int = 0
     false_negatives: int = 0
@@ -54,6 +58,8 @@ class CaseScore(_Model):
     turns: int = 0
     duration_ms: int = 0
     error: str | None = None
+    true_positives_by_category: dict[str, int] = Field(default_factory=dict)
+    false_positives_by_category: dict[str, int] = Field(default_factory=dict)
 
     @property
     def reported(self) -> int:
@@ -90,21 +96,34 @@ class Summary(_Model):
     mean_cost_usd: float | None
     mean_turns: float | None
     mean_duration_ms: float | None
+    by_category: dict[str, dict[str, float | int | None]] = Field(default_factory=dict)
+    """Reported findings per category: true_positives, false_positives, and precision.
+
+    Duplicates count as neither. A category whose precision sits far below the
+    rest is the specialist to tune, or to drop.
+    """
 
 
 def matches(finding: Finding, bug: ExpectedBug, tolerance: int = TOLERANCE) -> bool:
-    """Same file, same category, and a narrow finding span within tolerance of the bug's."""
-    if finding.file != bug.file or finding.category != bug.category:
+    """Same category, and a narrow finding span within tolerance of any of the bug's locations."""
+    if finding.category != bug.category:
         return False
     end = finding.end_line or finding.line
     if end - finding.line + 1 > MAX_SPAN:
         return False
-    return finding.line <= bug.line_end + tolerance and end >= bug.line_start - tolerance
+    return any(
+        finding.file == loc.file
+        and finding.line <= loc.line_end + tolerance
+        and end >= loc.line_start - tolerance
+        for loc in bug.locations
+    )
 
 
 def score_case(case: Case, result: ReviewResult) -> CaseScore:
     matched: set[int] = set()
     tp = fp = duplicates = 0
+    tp_by: Counter[str] = Counter()
+    fp_by: Counter[str] = Counter()
     verdicts: Counter[tuple[bool, str]] = Counter()  # (real bug, verifier decision)
     for finding in result.review.findings:
         hits = [i for i, bug in enumerate(case.expected) if matches(finding, bug)]
@@ -116,10 +135,12 @@ def score_case(case: Case, result: ReviewResult) -> CaseScore:
         if fresh:
             matched.add(fresh[0])
             tp += 1
+            tp_by[finding.category] += 1
         elif hits:
             duplicates += 1
         else:
             fp += 1
+            fp_by[finding.category] += 1
     return CaseScore(
         case=case.name,
         clean=case.clean,
@@ -134,6 +155,8 @@ def score_case(case: Case, result: ReviewResult) -> CaseScore:
         cost_usd=result.total_cost_usd,
         turns=sum(m.num_turns for m in result.metrics),
         duration_ms=result.duration_ms,
+        true_positives_by_category=dict(tp_by),
+        false_positives_by_category=dict(fp_by),
     )
 
 
@@ -165,6 +188,19 @@ def summarize(scores: Iterable[CaseScore]) -> Summary:
     controls = [s for s in ran if s.clean]
     flagged = sum(s.reported > 0 for s in controls)
     total_cost = round(sum(s.cost_usd for s in scores), 6)
+    tp_by: Counter[str] = Counter()
+    fp_by: Counter[str] = Counter()
+    for s in scores:
+        tp_by.update(s.true_positives_by_category)
+        fp_by.update(s.false_positives_by_category)
+    by_category: dict[str, dict[str, float | int | None]] = {
+        c: {
+            "true_positives": tp_by[c],
+            "false_positives": fp_by[c],
+            "precision": _ratio(tp_by[c], tp_by[c] + fp_by[c]),
+        }
+        for c in sorted(set(tp_by) | set(fp_by), key=_CATEGORY_ORDER.index)
+    }
     return Summary(
         cases=len(scores),
         errors=len(scores) - len(ran),
@@ -185,6 +221,7 @@ def summarize(scores: Iterable[CaseScore]) -> Summary:
         mean_cost_usd=_ratio(total_cost, len(scores)),
         mean_turns=_ratio(sum(s.turns for s in ran), len(ran)),
         mean_duration_ms=_ratio(sum(s.duration_ms for s in ran), len(ran)),
+        by_category=by_category,
     )
 
 
@@ -214,25 +251,62 @@ def render_markdown(scores_by_mode: Mapping[str, list[CaseScore]]) -> str:
             f"| ${_num(s.mean_cost_usd, '.2f')} | {_num(s.mean_turns, '.1f')} "
             f"| {_num(latency, '.0f')} s | {s.errors} |"
         )
+    for mode, scores in scores_by_mode.items():
+        trials = sorted({s.trial for s in scores})
+        if len(trials) > 1:
+            per_trial = [summarize(s for s in scores if s.trial == t) for t in trials]
+            lines += [
+                "",
+                f"{mode} recall per trial: " + ", ".join(_pct(t.recall) for t in per_trial),
+                f"{mode} precision per trial: " + ", ".join(_pct(t.precision) for t in per_trial),
+            ]
     modes = list(scores_by_mode)
-    by_case: dict[str, dict[str, CaseScore]] = {}
+    summaries = {mode: summarize(scores) for mode, scores in scores_by_mode.items()}
+    categories = [c for c in _CATEGORY_ORDER if any(c in s.by_category for s in summaries.values())]
+    if categories:
+        lines += [
+            "",
+            "| Category | " + " | ".join(f"{m}: TP / FP (precision)" for m in modes) + " |",
+            "|---|" + "---|" * len(modes),
+        ]
+        for category in categories:
+            cells = []
+            for mode in modes:
+                row = summaries[mode].by_category.get(category)
+                if row is None:
+                    cells.append("")
+                else:
+                    precision = row["precision"]
+                    cells.append(
+                        f"{row['true_positives']} / {row['false_positives']} "
+                        f"({_pct(None if precision is None else float(precision))})"
+                    )
+            lines.append(f"| {category} | " + " | ".join(cells) + " |")
+    by_case: dict[str, dict[str, list[CaseScore]]] = {}
     for mode, scores in scores_by_mode.items():
         for score in scores:
-            by_case.setdefault(score.case, {})[mode] = score
+            by_case.setdefault(score.case, {}).setdefault(mode, []).append(score)
     lines += [
         "",
         "| Case | " + " | ".join(f"{m}: TP / FP / FN" for m in modes) + " |",
         "|---|" + "---|" * len(modes),
     ]
     for case, per_mode in sorted(by_case.items()):
-        cells = []
-        for mode in modes:
-            s = per_mode.get(mode)
-            if s is None:
-                cells.append("")
-            elif s.error is not None:
-                cells.append("error")
-            else:
-                cells.append(f"{s.true_positives} / {s.false_positives} / {s.false_negatives}")
-        lines.append(f"| {case} | " + " | ".join(cells) + " |")
+        lines.append(
+            f"| {case} | " + " | ".join(_case_cell(per_mode.get(m, [])) for m in modes) + " |"
+        )
     return "\n".join(lines) + "\n"
+
+
+def _case_cell(runs: list[CaseScore]) -> str:
+    """A case's counts in one mode, summed over its trials; failed runs are counted, not hidden."""
+    if not runs:
+        return ""
+    errors = sum(r.error is not None for r in runs)
+    if errors == len(runs):
+        return "error" if errors == 1 else f"error ({errors} runs)"
+    tp = sum(r.true_positives for r in runs)
+    fp = sum(r.false_positives for r in runs)
+    fn = sum(r.false_negatives for r in runs)
+    cell = f"{tp} / {fp} / {fn}"
+    return cell + (f" ({errors} errored)" if errors else "")
