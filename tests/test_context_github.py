@@ -254,3 +254,16 @@ def test_repo_review_comments_page_through_the_repository_since_a_date() -> None
     params = route.calls[0].request.url.params
     assert params["since"] == "2026-09-01T00:00:00Z"
     assert (params["sort"], params["direction"], params["per_page"]) == ("created", "asc", "100")
+
+
+@respx.mock
+def test_create_check_run_posts_the_payload_and_returns_the_url() -> None:
+    route = respx.post(f"{API}/repos/o/r/check-runs").mock(
+        return_value=httpx.Response(201, json={"html_url": "https://github.com/o/r/runs/5"})
+    )
+    payload = {"name": "Argus", "head_sha": "a" * 40, "status": "completed"}
+
+    url = client().create_check_run("o", "r", payload)
+
+    assert url == "https://github.com/o/r/runs/5"
+    assert route.calls.last.request.read() == httpx.Request("POST", "x", json=payload).read()

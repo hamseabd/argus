@@ -386,3 +386,13 @@ def rank_findings(findings: list[Finding]) -> list[Finding]:
         kept,
         key=lambda f: (_STATUS_ORDER[f.status], SEVERITY_ORDER[f.severity], f.file, f.line),
     )
+
+
+def gate_tripped(findings: list[Finding], fail_on: str) -> bool:
+    """True if any finding not refuted is at or above the severity.
+
+    A known finding counts: reported once before is not fixed, so an open
+    critical still fails the gate however many times Argus has seen it.
+    """
+    threshold = SEVERITY_ORDER[fail_on]
+    return any(f.status != "rejected" and SEVERITY_ORDER[f.severity] <= threshold for f in findings)

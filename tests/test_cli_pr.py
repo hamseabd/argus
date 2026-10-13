@@ -80,6 +80,10 @@ class FakeGitHub:
     def file_text(self, owner: str, repo: str, path: str, ref: str) -> str:
         raise GitHubError(404, "Not Found")
 
+    def create_check_run(self, owner: str, repo: str, payload: dict) -> str:
+        self.calls["check"] = (owner, repo, payload)
+        return "https://github.com/o/r/runs/5"
+
     def post_review(self, owner: str, repo: str, number: int, payload: dict) -> str:
         self.calls["posted"] = (owner, repo, number, payload)
         if isinstance(self.calls.get("post_outcome"), Exception):
@@ -121,7 +125,7 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
     ):
         calls["context"] = context
         calls["known"] = list(known)
-        return fake_result()
+        return calls.get("outcome") or fake_result()
 
     monkeypatch.setattr(cli, "GitHubClient", fake_client)
     monkeypatch.setattr(cli, "pr_context", fake_pr_context)
@@ -421,6 +425,45 @@ def test_pr_review_reads_the_rules_of_the_repository(stubbed: dict, monkeypatch)
     assert stubbed["context"].review_rules == "Prefer explicit errors.\n"
 
 
+def critical_result() -> ReviewResult:
+    base = fake_result()
+    finding = base.review.findings[0].model_copy(update={"severity": "critical"})
+    return base.model_copy(
+        update={"review": base.review.model_copy(update={"findings": [finding]})}
+    )
+
+
+def test_check_posts_the_gate_as_a_check_run_and_the_job_stays_green(
+    stubbed: dict, monkeypatch
+) -> None:
+    stubbed["outcome"] = critical_result()
+
+    result = runner.invoke(
+        cli.app, ["review", "--pr", "7", "--repo", "o/r", "--check", "--fail-on", "high"]
+    )
+
+    assert result.exit_code == 0, result.output  # the check carries the gate, not the job
+    owner, repo, payload = stubbed["check"]
+    assert (owner, repo, payload["conclusion"]) == ("o", "r", "failure")
+    assert "Check run: https://github.com/o/r/runs/5" in result.output
+
+
+def test_without_check_the_gate_is_still_the_exit_code(stubbed: dict) -> None:
+    stubbed["outcome"] = critical_result()
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r", "--fail-on", "high"])
+
+    assert result.exit_code == 3
+    assert "check" not in stubbed
+
+
+def test_check_needs_a_pull_request(stubbed: dict) -> None:
+    result = runner.invoke(cli.app, ["review", "--diff", "--check"])
+
+    assert result.exit_code == 2
+    assert "--check needs --pr" in result.output
+
+
 def test_with_a_gate_the_whole_pull_request_is_reviewed_again(
     stubbed: dict, increments: list
 ) -> None:
@@ -449,6 +492,32 @@ def test_with_a_gate_an_already_reviewed_head_is_still_reviewed(
     assert result.exit_code == 0, result.output
     assert "already reviewed" not in result.output
     assert "context" in stubbed
+
+
+def test_a_check_run_is_posted_even_on_a_head_already_reviewed(
+    stubbed: dict, increments: list
+) -> None:
+    # A required check must never sit pending: --check always reviews and posts.
+    stubbed["reviews"] = [earlier_review("a" * 40)]  # the PR head
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r", "--check"])
+
+    assert result.exit_code == 0, result.output
+    assert increments == []
+    assert "check" in stubbed
+
+
+def test_the_check_run_is_posted_even_when_posting_the_review_fails(stubbed: dict) -> None:
+    # A required check must never be left missing because the review post failed.
+    stubbed["post_outcome"] = GitHubError(422, "Unprocessable Entity")
+
+    result = runner.invoke(
+        cli.app,
+        ["review", "--pr", "7", "--repo", "o/r", "--post", "--check", "--fail-on", "critical"],
+    )
+
+    assert result.exit_code == 1
+    assert "check" in stubbed
 
 
 def test_a_push_that_changed_only_ignored_files_is_not_reviewed(

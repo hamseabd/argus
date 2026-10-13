@@ -53,7 +53,9 @@ def test_review_step_tells_argus_the_app_identity_it_posts_as() -> None:
     """Only this login's earlier reviews are trusted; it comes from the minted app, not a guess."""
     review = next(s for s in steps("review.yml", "review") if s.get("name") == "Review")
 
-    assert review["env"]["ARGUS_REVIEWER_LOGIN"] == "${{ steps.argus-app.outputs.app-slug }}[bot]"
+    assert review["env"]["ARGUS_REVIEWER_LOGIN"] == (
+        "${{ steps.argus-app.outputs.app-slug || steps.argus-app-checks.outputs.app-slug }}[bot]"
+    )
 
 
 def test_review_skips_drafts_and_fork_pull_requests() -> None:
@@ -87,8 +89,10 @@ def test_review_can_be_called_from_another_repository() -> None:
 
     required = {name for name, spec in call["secrets"].items() if spec["required"]}
     assert required == {"CLAUDE_CODE_OAUTH_TOKEN", "ARGUS_APP_ID", "ARGUS_APP_PRIVATE_KEY"}
-    assert list(call["inputs"]) == ["pr"]  # only for callers not running on a pull_request event
+    assert list(call["inputs"]) == ["pr", "fail-on"]
+    # pr only for callers not running on a pull_request event; fail-on only to gate merges.
     assert call["inputs"]["pr"]["required"] is False
+    assert call["inputs"]["fail-on"]["required"] is False
 
 
 def test_argus_runs_from_a_trusted_ref_and_only_reads_the_pr_head() -> None:
@@ -129,6 +133,7 @@ def test_review_step_uses_only_the_subscription_token_and_posts_with_an_artifact
         "ARGUS_LOG_FORMAT",
         "ARGUS_REVIEWER_LOGIN",
         "LANGSMITH_API_KEY",
+        "FAIL_ON",
     }
     assert review["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
     assert "--post" in review["run"] and "--json" in review["run"]
@@ -154,19 +159,38 @@ def test_tracing_is_optional_for_callers_and_off_without_the_key() -> None:
 
 def test_the_review_is_posted_as_the_argus_app() -> None:
     all_steps = steps("review.yml", "review")
-    mint = next(s for s in all_steps if "create-github-app-token@" in s.get("uses", ""))
+    mints = [s for s in all_steps if "create-github-app-token@" in s.get("uses", "")]
     review = next(s for s in all_steps if s.get("name") == "Review")
 
-    assert mint["id"] == "argus-app"
-    assert mint["with"] == {
+    plain, checks = mints
+    base = {
         "app-id": "${{ secrets.ARGUS_APP_ID }}",
         "private-key": "${{ secrets.ARGUS_APP_PRIVATE_KEY }}",
         "permission-pull-requests": "write",  # a ceiling the workflow enforces, not the app
         "permission-contents": "read",
     }
-    assert all_steps.index(mint) == all_steps.index(review) - 1  # shortest token lifetime
-    assert review["env"]["GITHUB_TOKEN"] == "${{ steps.argus-app.outputs.token }}"
+    assert (plain["id"], plain["with"]) == ("argus-app", base)
+    # Checks: write only for a caller that asked for the gate; an app without
+    # that permission cannot mint a token that asks for it.
+    assert checks["id"] == "argus-app-checks"
+    assert checks["with"] == {**base, "permission-checks": "write"}
+    assert plain["if"] == "inputs.fail-on == ''"
+    assert checks["if"] == "inputs.fail-on != ''"
+    assert all_steps.index(checks) == all_steps.index(review) - 1  # shortest token lifetime
+    assert all_steps.index(plain) == all_steps.index(review) - 2
+    assert review["env"]["GITHUB_TOKEN"] == (
+        "${{ steps.argus-app.outputs.token || steps.argus-app-checks.outputs.token }}"
+    )
     assert "secrets.GITHUB_TOKEN" not in (WORKFLOWS / "review.yml").read_text()
+
+
+def test_a_caller_can_gate_merges_on_an_argus_check_run() -> None:
+    fail_on = load("review.yml")["on"]["workflow_call"]["inputs"]["fail-on"]
+    review = next(s for s in steps("review.yml", "review") if s.get("name") == "Review")
+
+    assert fail_on["type"] == "string" and fail_on["default"] == ""
+    assert review["env"]["FAIL_ON"] == "${{ inputs.fail-on }}"  # never interpolated into the script
+    assert '--check --fail-on "$FAIL_ON"' in review["run"]
 
 
 def test_no_workflow_mentions_an_api_key() -> None:

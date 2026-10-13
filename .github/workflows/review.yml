@@ -46,6 +46,13 @@ on:
         description: Pull request number to review when the calling event is not a pull_request
         required: false
         type: number
+      fail-on:
+        description: >-
+          Gate merges on an "Argus" check run that fails at this severity or above
+          (critical, high, medium, low). The app then needs Checks read and write. Empty: no check run.
+        required: false
+        type: string
+        default: ""
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: Claude subscription token from `claude setup-token`
@@ -107,6 +114,7 @@ jobs:
         run: uv sync --frozen
       - name: Mint the Argus app token
         id: argus-app
+        if: inputs.fail-on == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.ARGUS_APP_ID }}
@@ -114,6 +122,19 @@ jobs:
           # The token gets only what posting a review needs, whatever the app holds.
           permission-pull-requests: write
           permission-contents: read
+      # The same token plus Checks: write, for a caller that gates merges on the
+      # "Argus" check run. A separate step, because an app without that
+      # permission cannot mint a token that asks for it.
+      - name: Mint the Argus app token with checks
+        id: argus-app-checks
+        if: inputs.fail-on != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ARGUS_APP_ID }}
+          private-key: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: read
+          permission-checks: write
       - name: Review
         working-directory: target
         run: |
@@ -122,16 +143,20 @@ jobs:
             export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.smith.langchain.com/otel
             export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=$LANGSMITH_API_KEY,Langsmith-Project=argus"
           fi
+          # With a gate, the check run carries it and the job stays green.
+          gate=()
+          if [ -n "$FAIL_ON" ]; then gate=(--check --fail-on "$FAIL_ON"); fi
           uv run --project "$GITHUB_WORKSPACE" argus review \
-            --pr "$PR_NUMBER" --post --json "$GITHUB_WORKSPACE/argus-review.json"
+            --pr "$PR_NUMBER" --post --json "$GITHUB_WORKSPACE/argus-review.json" "${gate[@]}"
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          GITHUB_TOKEN: ${{ steps.argus-app.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.argus-app.outputs.token || steps.argus-app-checks.outputs.token }}
           ARGUS_LOG_FORMAT: json
           # The login the minted token posts as; only its earlier reviews are
           # read back as already-reported findings.
-          ARGUS_REVIEWER_LOGIN: ${{ steps.argus-app.outputs.app-slug }}[bot]
+          ARGUS_REVIEWER_LOGIN: ${{ steps.argus-app.outputs.app-slug || steps.argus-app-checks.outputs.app-slug }}[bot]
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          FAIL_ON: ${{ inputs.fail-on }}
       - name: Keep the review record
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
