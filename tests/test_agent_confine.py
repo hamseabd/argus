@@ -48,7 +48,7 @@ def repo(tmp_path: Path) -> Path:
     ],
 )
 def test_reads_inside_the_repository_pass(repo: Path, tool: str, tool_input: dict) -> None:
-    resolved = {k: v.format(root=repo) for k, v in tool_input.items()}
+    resolved = {k: v.replace("{root}", str(repo)) for k, v in tool_input.items()}
 
     assert call(HookState(), repo, tool, resolved) == {}
 
@@ -66,11 +66,17 @@ def test_reads_inside_the_repository_pass(repo: Path, tool: str, tool_input: dic
         ("Glob", {"pattern": "*", "path": "/etc"}),
         ("Glob", {"pattern": "/home/**/.credentials.json"}),
         ("Glob", {"pattern": "../**"}),
+        ("Glob", {"pattern": ".git/**"}),
+        ("Glob", {"pattern": "**/.git/config"}),
+        ("Glob", {"pattern": "{..,x}/**"}),
+        ("Grep", {"pattern": "token", "glob": ".git/config"}),
+        ("Grep", {"pattern": "x", "glob": "../*"}),
+        ("Read", {"file_path": "~nosuchuser-argus/x"}),
     ],
 )
 def test_reads_outside_the_repository_are_denied(repo: Path, tool: str, tool_input: dict) -> None:
     state = HookState()
-    resolved = {k: v.format(root=repo) for k, v in tool_input.items()}
+    resolved = {k: v.replace("{root}", str(repo)) for k, v in tool_input.items()}
 
     out = call(state, repo, tool, resolved)
 
