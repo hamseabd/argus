@@ -1,5 +1,7 @@
 """Markdown rendering shared by the terminal report and the GitHub review."""
 
+import re
+
 from argus.domain.models import (
     SEVERITY_ORDER,
     AgentMetrics,
@@ -53,6 +55,11 @@ def render_finding(finding: Finding, heading: str = "##", verdict: Verdict | Non
         "",
         *_details(finding, verdict),
     ]
+    if finding.replacement is not None:
+        # A suggestion block works only on an inline comment; here it is shown as text.
+        span = finding.location.split(":", 1)[1]
+        noun = "lines" if "-" in span else "line"
+        lines += ["", f"**Replacement for {noun} {span}:**", "", code_block(finding.replacement)]
     return "\n".join(lines)
 
 
@@ -65,6 +72,18 @@ def finding_body(finding: Finding, verdict: Verdict | None = None) -> str:
             *_details(finding, verdict),
         ]
     )
+
+
+def code_block(text: str, info: str = "") -> str:
+    """text fenced longer than any backtick run inside it, so it cannot close its own block.
+
+    One trailing newline ends the last line and is dropped; any more are blank
+    lines and are kept.
+    """
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    body = text.removesuffix("\n")
+    return f"{fence}{info}\n{body}\n{fence}" if body else f"{fence}{info}\n{fence}"
 
 
 def verdicts_by_finding(result: ReviewResult) -> dict[str, Verdict]:

@@ -373,6 +373,47 @@ def test_a_review_with_no_inline_finding_asks_for_nothing() -> None:
     assert "React" not in body
 
 
+def test_a_replacement_becomes_a_one_click_suggestion_on_its_line() -> None:
+    fixed = finding(replacement="    return cache.get(key, default)")
+
+    (comment,) = build_review(result([fixed]), context())["comments"]
+
+    assert "```suggestion\n    return cache.get(key, default)\n```" in comment["body"]
+
+
+def test_a_multi_line_replacement_suggests_over_the_whole_range() -> None:
+    fixed = finding(line=2, end_line=3, replacement="a = 1\nb = 2")
+
+    (comment,) = build_review(result([fixed]), context())["comments"]
+
+    assert (comment["start_line"], comment["line"]) == (2, 3)
+    assert "```suggestion\na = 1\nb = 2\n```" in comment["body"]
+
+
+def test_no_suggestion_when_the_comment_cannot_cover_the_replaced_range() -> None:
+    # The range runs off the diff, so the comment collapses to its first line;
+    # a suggestion there would replace one line with what was meant for several.
+    fixed = finding(line=2, end_line=9, replacement="a = 1")
+
+    (comment,) = build_review(result([fixed]), context())["comments"]
+
+    assert "suggestion" not in comment["body"]
+
+
+def test_a_replacement_holding_backticks_gets_a_longer_fence() -> None:
+    fixed = finding(line=2, end_line=4, replacement='doc = """\n```py\nx = 1\n```"""')
+
+    (comment,) = build_review(result([fixed]), context())["comments"]
+
+    assert "````suggestion\n" in comment["body"]
+
+
+def test_an_empty_replacement_suggests_deleting_the_lines() -> None:
+    (comment,) = build_review(result([finding(replacement="")]), context())["comments"]
+
+    assert "```suggestion\n```" in comment["body"]
+
+
 def test_an_inline_finding_posted_without_a_status_is_still_known() -> None:
     review = {
         "id": 1,
@@ -397,3 +438,30 @@ def test_an_inline_finding_posted_without_a_status_is_still_known() -> None:
         "correctness",
         4,
     )
+
+
+def test_only_a_confirmed_finding_gets_a_one_click_suggestion() -> None:
+    # Applying is one click; the replacement was written by a model reading
+    # an untrusted diff, so it is offered only once the verifier confirmed it.
+    unverified = finding(status="unverified", replacement="x = 2")
+
+    (comment,) = build_review(result([unverified]), context())["comments"]
+
+    assert "suggestion" not in comment["body"]
+
+
+def test_a_replacement_ending_in_a_blank_line_keeps_it() -> None:
+    fixed = finding(line=2, end_line=3, replacement="a = 1\n\n")
+
+    (comment,) = build_review(result([fixed]), context())["comments"]
+
+    assert "```suggestion\na = 1\n\n```" in comment["body"]
+
+
+def test_a_finding_listed_in_the_body_shows_its_replacement() -> None:
+    off_diff = finding(line=9, replacement="return None")
+
+    body = build_review(result([off_diff]), context())["body"]
+
+    assert "**Replacement for line 9:**" in body
+    assert "return None" in body

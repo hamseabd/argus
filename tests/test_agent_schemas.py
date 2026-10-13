@@ -76,6 +76,7 @@ FINDING_INPUT = {
     "description": "The slice stops one short of the page.",
     "evidence": "users[start:end - 1] drops the last user.",
     "suggested_fix": None,
+    "replacement": None,
     "confidence": 0.9,
 }
 
@@ -98,6 +99,7 @@ def test_the_finding_input_excludes_pipeline_owned_fields() -> None:
         "description",
         "evidence",
         "suggested_fix",
+        "replacement",
         "confidence",
     }
 

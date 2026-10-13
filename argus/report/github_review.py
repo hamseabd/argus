@@ -32,6 +32,7 @@ from argus.domain.models import (
     rank_findings,
 )
 from argus.report.markdown import (
+    code_block,
     finding_body,
     render_counts,
     render_finding,
@@ -207,11 +208,7 @@ def _category(word: str) -> Category | None:
 
 
 def _comment(finding: Finding, lines: frozenset[int], verdict: Verdict | None) -> dict[str, Any]:
-    comment: dict[str, Any] = {
-        "path": finding.file,
-        "side": "RIGHT",
-        "body": finding_body(finding, verdict),
-    }
+    comment: dict[str, Any] = {"path": finding.file, "side": "RIGHT"}
     end = finding.end_line
     if (
         end is not None
@@ -221,7 +218,25 @@ def _comment(finding: Finding, lines: frozenset[int], verdict: Verdict | None) -
         comment |= {"start_line": finding.line, "start_side": "RIGHT", "line": end}
     else:
         comment["line"] = finding.line
+    body = finding_body(finding, verdict)
+    # A suggestion replaces exactly the lines the comment spans, so it is offered
+    # only when the comment covers the finding's whole range.
+    covered = (comment.get("start_line", comment["line"]), comment["line"])
+    # Only a confirmed finding: applying is one click, and the replacement was
+    # written by a model that read an untrusted diff.
+    if (
+        finding.replacement is not None
+        and finding.status == "confirmed"
+        and covered == (finding.line, end or finding.line)
+    ):
+        body += "\n\n" + _suggestion(finding.replacement)
+    comment["body"] = body
     return comment
+
+
+def _suggestion(replacement: str) -> str:
+    """A GitHub suggestion block, fenced longer than any backtick run in the replacement."""
+    return code_block(replacement, "suggestion")
 
 
 def _body(

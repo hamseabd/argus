@@ -19,7 +19,8 @@ Do not report formatting, naming taste, or comments. Do not report a missing tes
 ## Output
 
 Record each finding by calling `report_finding`, once per finding, as soon as you can support it.
-Its fields: `file` (repository-relative path), `line` (in the new version of the file) and optional `end_line`, `severity` (critical, high, medium, low), `category` is `quality`, `title` (a short statement of the gap, at most 100 characters), `description` (what is wrong and why it matters), `evidence` (the code path or input that shows it is real), optional `suggested_fix`, and `confidence` between 0 and 1.
+Its fields: `file` (repository-relative path), `line` (in the new version of the file) and optional `end_line`, `severity` (critical, high, medium, low), `category` is `quality`, `title` (a short statement of the gap, at most 100 characters), `description` (what is wrong and why it matters), `evidence` (the code path or input that shows it is real), optional `suggested_fix`, optional `replacement`, and `confidence` between 0 and 1.
+`replacement` is the exact new text of lines `line` to `end_line`, indentation included, and it is offered to the author as a one-click change; give it only when the whole fix sits inside those lines, and leave it null otherwise.
 The tool checks the finding against the repository and answers with its id, such as `F3`; if it refuses one, it says why, so fix that and call it again.
 
 Your final message is one line per finding you recorded, `<id> <file>:<line> [<severity>] <title>`, and nothing else; the lead uses these lines to remove duplicates.
