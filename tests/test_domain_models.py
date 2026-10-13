@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from argus.domain.models import (
+    MAX_REPLACEMENT_LENGTH,
     AgentMetrics,
     ChangedFile,
     Finding,
@@ -383,3 +384,20 @@ def test_a_triage_names_what_to_drop_and_why() -> None:
 
 def test_a_triage_without_drops_keeps_everything() -> None:
     assert Triage(summary="s", files_reviewed=[], dropped=[]).dropped_ids == set()
+
+
+def test_a_replacement_is_bounded() -> None:
+    base = dict(
+        id="quality-1",
+        file="a.py",
+        line=1,
+        severity="low",
+        category="quality",
+        title="t",
+        description="d",
+        evidence="e",
+        confidence=0.5,
+    )
+
+    with pytest.raises(ValidationError, match="replacement"):
+        Finding(**base, replacement="x" * (MAX_REPLACEMENT_LENGTH + 1))

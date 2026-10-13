@@ -170,11 +170,7 @@ def review(
                     ignore=patterns,
                 )
                 _warn_on_head_mismatch(context)
-                rules = (
-                    rules_from_github(target.client, target.owner, target.repo, context.pr.base_ref)
-                    if context.pr
-                    else None
-                )
+                rules = rules_from_github(target.client, target.owner, target.repo)
                 if not include_known:
                     reviews = _earlier_reviews(target, settings.reviewer_login)
                     known = _known_findings(target, settings.reviewer_login, reviews)
@@ -233,7 +229,7 @@ def feedback(
         typer.Option("--since", help="Only findings posted on or after this date (YYYY-MM-DD)."),
     ] = None,
     json_path: Annotated[
-        Path | None, typer.Option("--json", help="Write every rated finding here.")
+        Path | None, typer.Option("--json", help="Write every posted finding here, rated or not.")
     ] = None,
 ) -> None:
     """Read the reactions on Argus's posted findings: precision as the readers judged it.
