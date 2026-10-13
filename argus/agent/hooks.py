@@ -281,14 +281,14 @@ def await_specialists(state: HookState) -> Hook:
             waiting = sorted(set(state.running.values()))
             reason = (
                 f"Still running: {', '.join(waiting)}. Wait for their findings, "
-                "merge them with the others, then answer with the Review."
+                "then answer with the Triage."
             )
             log.warning("answer_held", waiting=waiting)
         else:
             finished = sorted(set(state.finished))
             reason = (
                 f"{', '.join(finished)} just finished; its report may not have reached you "
-                "yet. Wait for it, merge it with the others, then answer with the Review."
+                "yet. Wait for it, then answer with the Triage."
             )
             log.warning("answer_held", finished=finished)
         state.finished.clear()
@@ -318,7 +318,7 @@ def limit_lead_reading(state: HookState) -> Hook:
         state.reads_denied += 1
         reason = (
             f"You have used the {budget} reads a lead gets. The specialists have read "
-            "the change for you: merge what they reported and answer with the Review."
+            "the change for you and recorded what they found: answer with the Triage."
         )
         get_logger().warning("lead_read_denied", tool=data.get("tool_name"), budget=budget)
         return _deny(state, data, reason)

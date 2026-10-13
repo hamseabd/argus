@@ -241,3 +241,9 @@ def test_plural_is_shared_by_the_report_and_the_summary() -> None:
     assert plural(1, "turn") == "turn"
     assert plural(2, "turn") == "turns"
     assert summary.plural is plural
+
+
+def test_a_finding_says_which_specialist_found_it() -> None:
+    text = render_report(result([finding(reported_by="security")]))
+
+    assert "confidence 0.95 · found by security" in text
