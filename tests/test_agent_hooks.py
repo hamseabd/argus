@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +13,7 @@ from argus.agent.hooks import (
     DENIED_TOOL_MATCHER,
     DENIED_TOOLS,
     LEAD_AGENT,
+    PATH_TOOL_MATCHER,
     READ_TOOL_MATCHER,
     READ_TOOLS,
     STRUCTURED_OUTPUT_TOOL,
@@ -23,6 +25,8 @@ from argus.agent.hooks import (
     limit_lead_reading,
 )
 from argus.agent.trace import TraceRecorder
+
+REPO = Path("/repo")
 
 
 def hook_input(name: str, event: str = "PreToolUse", **extra) -> dict:
@@ -80,7 +84,7 @@ def test_denials_are_counted_in_state() -> None:
 
 def test_subagent_start_and_stop_are_counted() -> None:
     state = HookState()
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     start = hooks["SubagentStart"][0].hooks[0]
     stop = hooks["SubagentStop"][0].hooks[0]
     base = {"session_id": "s", "transcript_path": "/t", "cwd": "/r"}
@@ -119,7 +123,7 @@ def test_subagent_start_and_stop_are_counted() -> None:
 
 def test_post_tool_use_counts_calls_and_failures() -> None:
     state = HookState()
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     post = hooks["PostToolUse"][0].hooks[0]
     failed = hooks["PostToolUseFailure"][0].hooks[0]
 
@@ -135,7 +139,7 @@ def test_post_tool_use_counts_calls_and_failures() -> None:
 
 def test_rejected_structured_outputs_are_counted_separately() -> None:
     state = HookState()
-    failed = build_hooks(state)["PostToolUseFailure"][0].hooks[0]
+    failed = build_hooks(state, REPO)["PostToolUseFailure"][0].hooks[0]
     rejected = hook_input(
         "StructuredOutput", "PostToolUseFailure", error="Output does not match required schema"
     )
@@ -149,7 +153,7 @@ def test_rejected_structured_outputs_are_counted_separately() -> None:
 
 def test_tool_calls_are_attributed_to_the_subagent_that_made_them() -> None:
     state = HookState()
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     post = hooks["PostToolUse"][0].hooks[0]
     failed = hooks["PostToolUseFailure"][0].hooks[0]
     inside = {"agent_id": "a-sec", "agent_type": "security"}
@@ -169,7 +173,7 @@ def test_tool_calls_are_attributed_to_the_subagent_that_made_them() -> None:
 def test_subagent_duration_is_measured_from_start_to_stop() -> None:
     ticks = iter([10.0, 12.5])
     state = HookState(clock=lambda: next(ticks))
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     start = hooks["SubagentStart"][0].hooks[0]
     stop = hooks["SubagentStop"][0].hooks[0]
     agent = {"agent_id": "a-q", "agent_type": "quality"}
@@ -248,7 +252,7 @@ def test_the_read_matcher_covers_every_read_tool_and_nothing_else() -> None:
 
 
 def test_build_hooks_registers_the_expected_events_and_matchers() -> None:
-    hooks = build_hooks(HookState())
+    hooks = build_hooks(HookState(), REPO)
 
     assert set(hooks) == {
         "PreToolUse",
@@ -261,6 +265,7 @@ def test_build_hooks_registers_the_expected_events_and_matchers() -> None:
         DENIED_TOOL_MATCHER,
         READ_TOOL_MATCHER,
         STRUCTURED_OUTPUT_TOOL,
+        PATH_TOOL_MATCHER,
         None,
     ]
     assert hooks["PostToolUse"][0].matcher is None
@@ -344,7 +349,7 @@ class RecorderSpy:
 def test_hooks_feed_the_recorder_when_one_is_attached() -> None:
     state = HookState(read_budget=0)
     state.recorder = RecorderSpy()
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     ctx = {"signal": None}
     observe = hooks["PreToolUse"][-1].hooks[0]
 
@@ -381,7 +386,7 @@ def test_hooks_feed_the_recorder_when_one_is_attached() -> None:
 
 def test_hooks_run_without_a_recorder() -> None:
     state = HookState()
-    observe = build_hooks(state)["PreToolUse"][-1].hooks[0]
+    observe = build_hooks(state, REPO)["PreToolUse"][-1].hooks[0]
 
     assert asyncio.run(observe(hook_input("Grep"), None, {"signal": None})) == {}
 
@@ -413,7 +418,7 @@ def test_a_denial_still_comes_back_even_if_the_recorder_is_broken(
 
 def test_the_lead_cannot_answer_while_a_specialist_is_still_running() -> None:
     state = HookState()
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     ctx = {"signal": None}
     start = hooks["SubagentStart"][0].hooks[0]
     stop = hooks["SubagentStop"][0].hooks[0]
@@ -475,7 +480,7 @@ def test_the_lead_cannot_answer_while_a_specialist_is_still_running() -> None:
 
 def test_the_answer_is_never_held_when_no_specialist_ran() -> None:
     state = HookState()
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     answer = {
         "hook_event_name": "PreToolUse",
         "tool_name": STRUCTURED_OUTPUT_TOOL,
@@ -532,7 +537,7 @@ def test_a_subagent_s_structured_output_is_not_the_lead_s_answer() -> None:
 
 def test_a_rejected_answer_is_never_kept() -> None:
     state = HookState()
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     failure = hooks["PostToolUseFailure"][0].hooks[0]
 
     asyncio.run(
@@ -566,7 +571,7 @@ def _held(state: HookState) -> bool:
 
 def test_the_answer_is_held_one_round_after_the_last_specialist_stops() -> None:
     state = HookState()
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     _subagent(hooks, "SubagentStart", "a-1", "correctness")
     _subagent(hooks, "SubagentStop", "a-1", "correctness")
 
@@ -579,7 +584,7 @@ def test_holds_are_bounded_so_a_stuck_specialist_cannot_hold_the_answer_forever(
     stream = io.StringIO()
     telemetry.configure(log_format="json", stream=stream)
     state = HookState(answer_hold_limit=2)
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     _subagent(hooks, "SubagentStart", "a-1", "quality")
 
     assert [_held(state) for _ in range(3)] == [True, True, False]
@@ -594,7 +599,7 @@ def test_a_release_after_the_specialists_report_is_logged_with_the_count() -> No
     stream = io.StringIO()
     telemetry.configure(log_format="json", stream=stream)
     state = HookState()
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     _subagent(hooks, "SubagentStart", "a-1", "security")
     assert _held(state) is True
     _subagent(hooks, "SubagentStop", "a-1", "security")
@@ -611,7 +616,7 @@ def test_every_deny_path_records_the_refusal_on_the_trace() -> None:
     """The three refusals share _deny, so each path pins both of its effects: payload and span."""
     state = HookState(read_budget=0)
     state.recorder = RecorderSpy()
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     _subagent(hooks, "SubagentStart", "a-1", "security")
 
     assert _held(state) is True
@@ -628,7 +633,7 @@ def test_every_deny_path_records_the_refusal_on_the_trace() -> None:
 
 def test_a_hold_limit_of_zero_never_holds() -> None:
     state = HookState(answer_hold_limit=0)
-    hooks = build_hooks(state)
+    hooks = build_hooks(state, REPO)
     _subagent(hooks, "SubagentStart", "a-1", "security")
 
     assert _held(state) is False

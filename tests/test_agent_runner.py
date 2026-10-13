@@ -1,5 +1,6 @@
 import io
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,6 +24,8 @@ from argus.agent.runner import RunResult, SdkRunner
 from argus.domain.errors import AgentRunError, ReviewProtocolError
 from argus.domain.models import AgentMetrics
 from argus.tracing import span
+
+REPO = Path("/repo")
 
 
 def result(**overrides: Any) -> ResultMessage:
@@ -303,7 +306,7 @@ def traced_runner(script, trace_content: bool = False) -> SdkRunner:
 
 
 def hooked_options(state: HookState) -> ClaudeAgentOptions:
-    return ClaudeAgentOptions(model="claude-opus-5", hooks=build_hooks(state))
+    return ClaudeAgentOptions(model="claude-opus-5", hooks=build_hooks(state, REPO))
 
 
 def test_a_query_becomes_a_span_tree_under_the_current_stage(spans) -> None:

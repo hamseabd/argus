@@ -241,3 +241,14 @@ def test_the_eval_workflow_pins_every_action_by_commit() -> None:
         if uses:
             sha = uses.split("@", 1)[1]
             assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha), uses
+
+
+def test_the_pr_head_checkout_leaves_no_token_in_its_git_config() -> None:
+    # The reviewers read the target directory; a persisted credential would
+    # sit in target/.git/config for a prompt injection to ask for.
+    target = next(
+        s
+        for s in steps("review.yml", "review")
+        if "actions/checkout@" in s.get("uses", "") and s.get("with", {}).get("path") == "target"
+    )
+    assert target["with"]["persist-credentials"] is False

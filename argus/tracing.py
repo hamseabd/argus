@@ -42,7 +42,7 @@ MAX_ATTRIBUTE_CHARS = 8192
 ERROR_CHARS = 300
 
 _CREDENTIAL = re.compile(r"(sk-ant-|gh[pousr]_|github_pat_|lsv2_)[A-Za-z0-9_\-]{8,}")
-"""Review logs and traces leave the machine; nothing token-shaped goes into one.
+"""Review logs, traces, and posted reviews leave the machine; nothing token-shaped goes into one.
 
 All three credentials the review step holds are covered: the Claude
 subscription token it runs on, the app installation token it posts with,
@@ -57,6 +57,21 @@ def tracer() -> trace.Tracer:
 def redact(text: str, limit: int = MAX_ATTRIBUTE_CHARS) -> str:
     cleaned = _CREDENTIAL.sub("[redacted]", text)
     return cleaned if len(cleaned) <= limit else cleaned[: limit - 3] + "..."
+
+
+def scrub(value: object) -> object:
+    """value with every string in it redacted at any depth, and nothing truncated.
+
+    For model output that leaves the machine whole, such as a posted review,
+    where redact()'s length bound would cut the text.
+    """
+    if isinstance(value, str):
+        return _CREDENTIAL.sub("[redacted]", value)
+    if isinstance(value, dict):
+        return {k: scrub(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [scrub(v) for v in value]
+    return value
 
 
 def summarize(value: object, limit: int = 200) -> str:

@@ -17,6 +17,7 @@ and denial of every tool call.
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from claude_agent_sdk import HookContext, HookMatcher
@@ -38,6 +39,12 @@ ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", "Agent", GIT_HISTORY_T
 READ_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob", GIT_HISTORY_TOOL_NAME)
 """The tools that only look at code; the lead's reading budget governs these."""
 READ_TOOL_MATCHER = "|".join(sorted(READ_TOOLS))
+PATH_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob")
+"""The built-in tools that take a path; confine_reads keeps them inside the repository.
+
+git_history checks its own path, in argus.agent.tools.
+"""
+PATH_TOOL_MATCHER = "|".join(PATH_TOOLS)
 AGENT_TOOL = "Agent"
 """The tool the lead delegates with; its calls are what the ledger and the trace attribute to."""
 STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
@@ -121,6 +128,66 @@ def deny_mutating_tools(state: HookState) -> Hook:
         return _deny(state, data, reason)
 
     return hook
+
+
+def confine_reads(state: HookState, repo_root: Path) -> Hook:
+    """Refuse a read that would leave the repository under review or enter its .git.
+
+    The tool set is read-only, but a read is still an exfiltration path: a
+    prompt injection in the diff, the PR body, or a symlink the change adds
+    can ask for /proc/self/environ or the CLI's credentials, and what a
+    reviewer reads can be quoted in a finding that is posted on the pull
+    request. Paths are resolved with symlinks followed, so a link inside the
+    repository that points out of it is refused too. .git is refused because
+    a checkout can keep a token in its config.
+    """
+    root = repo_root.resolve()
+
+    async def hook(data: HookData, _tool_use_id: str | None, _ctx: HookContext) -> dict[str, Any]:
+        name = data.get("tool_name", "")
+        if name not in PATH_TOOLS:
+            return {}
+        problem = _outside(root, name, data.get("tool_input") or {})
+        if problem is None:
+            return {}
+        state.denied += 1
+        get_logger().warning(
+            "read_outside_repo", tool=name, input=summarize(data.get("tool_input"))
+        )
+        reason = (
+            f"{problem} is outside the repository under review. Argus reads only the "
+            "repository's own files, and never its .git directory."
+        )
+        return _deny(state, data, reason)
+
+    return hook
+
+
+def _outside(root: Path, tool: str, tool_input: dict[str, Any]) -> str | None:
+    """The offending path of a Read, Grep, or Glob call, or None when it stays inside root."""
+    if tool == "Read":
+        candidates = [tool_input.get("file_path")]
+        if not candidates[0]:
+            return "a read with no file_path"
+    else:
+        candidates = [tool_input.get("path") or "."]
+        if tool == "Glob":
+            # A glob pattern can climb out on its own: an absolute or ../ pattern.
+            pattern = str(tool_input.get("pattern") or "")
+            if pattern.startswith(("/", "~")) or ".." in Path(pattern).parts:
+                return pattern
+    for raw in candidates:
+        if not _inside(root, str(raw)):
+            return str(raw)
+    return None
+
+
+def _inside(root: Path, raw: str) -> bool:
+    path = Path(raw).expanduser()
+    resolved = (path if path.is_absolute() else root / path).resolve()
+    if not resolved.is_relative_to(root):
+        return False
+    return ".git" not in resolved.relative_to(root).parts
 
 
 def await_specialists(state: HookState) -> Hook:
@@ -299,12 +366,13 @@ def on_subagent_stop(state: HookState) -> Hook:
     return hook
 
 
-def build_hooks(state: HookState) -> dict[HookEvent, list[HookMatcher]]:
+def build_hooks(state: HookState, repo_root: Path) -> dict[HookEvent, list[HookMatcher]]:
     return {
         "PreToolUse": [
             _matcher([deny_mutating_tools(state)], DENIED_TOOL_MATCHER),
             _matcher([limit_lead_reading(state)], READ_TOOL_MATCHER),
             _matcher([await_specialists(state)], STRUCTURED_OUTPUT_TOOL),
+            _matcher([confine_reads(state, repo_root)], PATH_TOOL_MATCHER),
             _matcher([observe_tool_start(state)]),
         ],
         "PostToolUse": [_matcher([audit_tool_call(state)])],

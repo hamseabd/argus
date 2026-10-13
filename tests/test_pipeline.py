@@ -389,3 +389,25 @@ def test_without_a_config_the_result_log_and_trace_carry_none(tmp_path: Path, sp
     assert "config" not in start
     (run,) = by_name(spans.get_finished_spans(), "argus.run")
     assert "langsmith.metadata.config" not in run.attributes
+
+
+def test_nothing_token_shaped_survives_into_the_result(tmp_path: Path) -> None:
+    # A reviewer tricked into reading a credential would quote it as evidence,
+    # and the result is posted, summarised, printed, and kept as an artifact.
+    token = "sk-ant-oat01-" + "a" * 40
+    leaky = finding(
+        1,
+        title=f"Token {token}",
+        evidence=f"environ holds CLAUDE_CODE_OAUTH_TOKEN={token}",
+        suggested_fix="rotate ghs_" + "b" * 36,
+    )
+    review = Review(summary=f"Found {token} in the env.", files_reviewed=[], findings=[leaky])
+    agent = FakeAgent(review, {"correctness-1": "confirmed"})
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    dumped = result.model_dump_json()
+    assert "sk-ant-oat01-aaaa" not in dumped
+    assert "ghs_bbbb" not in dumped
+    assert result.review.findings[0].evidence.endswith("[redacted]")
+    assert result.review.findings[0].status == "confirmed"
