@@ -489,3 +489,16 @@ def test_with_a_gate_an_already_reviewed_head_is_still_reviewed(
     assert result.exit_code == 0, result.output
     assert "already reviewed" not in result.output
     assert "context" in stubbed
+
+
+def test_a_check_run_is_posted_even_on_a_head_already_reviewed(
+    stubbed: dict, increments: list
+) -> None:
+    # A required check must never sit pending: --check always reviews and posts.
+    stubbed["reviews"] = [earlier_review("a" * 40)]  # the PR head
+
+    result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r", "--check"])
+
+    assert result.exit_code == 0, result.output
+    assert increments == []
+    assert "check" in stubbed
