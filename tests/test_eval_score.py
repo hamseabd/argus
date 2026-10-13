@@ -421,3 +421,11 @@ def test_inconclusive_verifications_are_counted_but_are_not_decisions() -> None:
     assert scored.verifier_inconclusive == 1
     assert (scored.true_bugs_confirmed, scored.true_bugs_rejected) == (0, 0)
     assert summarize([scored]).verifier_inconclusive == 1
+
+
+def test_the_table_shows_how_often_the_verifier_was_inconclusive() -> None:
+    unsure = score_case(bug_case(SQLI), result(finding("a", status="unverified")))
+    unsure = unsure.model_copy(update={"verifier_inconclusive": 2})
+
+    assert "(2 inconclusive)" in render_markdown({"verify": [unsure]})
+    assert "inconclusive" not in render_markdown({"verify": [score_case(bug_case(SQLI), result())]})
