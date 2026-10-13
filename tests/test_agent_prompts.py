@@ -257,3 +257,10 @@ def test_a_diff_cannot_close_its_own_fence() -> None:
 
     assert "````diff\n" + diff in text
     assert text.rstrip().endswith("````")
+
+
+def test_the_verifier_is_told_a_rejection_stays_visible() -> None:
+    text = load_prompt("verifier")
+
+    assert "dropped from the review" not in text
+    assert "still shown" in text
