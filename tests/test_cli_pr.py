@@ -397,3 +397,33 @@ def test_full_reviews_the_whole_pull_request_but_still_skips_known_findings(
     assert increments == []
     assert stubbed["context"].increment is None
     assert stubbed["fetched_known"] is True
+
+
+def test_with_a_gate_the_whole_pull_request_is_reviewed_again(
+    stubbed: dict, increments: list
+) -> None:
+    # An increment would never re-find a critical from an earlier push, so a
+    # gated run must see everything: reported before is not fixed.
+    stubbed["reviews"] = [earlier_review("b" * 40)]
+
+    result = runner.invoke(
+        cli.app, ["review", "--pr", "7", "--repo", "o/r", "--fail-on", "critical"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert increments == []
+    assert stubbed["context"].increment is None
+
+
+def test_with_a_gate_an_already_reviewed_head_is_still_reviewed(
+    stubbed: dict, increments: list
+) -> None:
+    stubbed["reviews"] = [earlier_review("a" * 40)]  # the PR head
+
+    result = runner.invoke(
+        cli.app, ["review", "--pr", "7", "--repo", "o/r", "--fail-on", "critical"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "already reviewed" not in result.output
+    assert "context" in stubbed
