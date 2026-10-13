@@ -15,12 +15,14 @@ from typing import Protocol
 from argus.context.diff import diff_sections
 from argus.domain.errors import AgentRunError, ArgusError, ReviewProtocolError
 from argus.domain.models import (
+    SEVERITY_ORDER,
     Finding,
     KnownFinding,
     Review,
     ReviewContext,
     ReviewResult,
     RunConfig,
+    Severity,
     StageMetrics,
     Status,
     Verdict,
@@ -65,6 +67,7 @@ async def run_review(
     run_id: str | None = None,
     known: Sequence[KnownFinding] = (),
     config: RunConfig | None = None,
+    verify_min_severity: Severity = "low",
 ) -> ReviewResult:
     """Run the review stage, verify each finding, and return everything produced.
 
@@ -73,6 +76,8 @@ async def run_review(
     Pass known, what earlier Argus reviews already posted on the pull request,
     and a finding that repeats one is marked known before verification: it is
     neither re-verified nor reported again.
+    Findings below verify_min_severity are reported unverified without a
+    verifier query; the default, low, verifies every finding.
     Pass config, what shaped the agent, and it travels with the result, the
     run_start event, and the trace, so runs can be told apart by what they ran.
     The whole run is one trace: argus.run, with a span per stage under it.
@@ -88,7 +93,7 @@ async def run_review(
     )
     with span("argus.run", "chain", attributes=attributes) as run_span:
         result = await _run_review(
-            context, agent, verify, verify_concurrency, run_id, known, config
+            context, agent, verify, verify_concurrency, run_id, known, config, verify_min_severity
         )
         findings = result.review.findings
         run_span.set_attributes(
@@ -111,6 +116,7 @@ async def _run_review(
     run_id: str,
     known: Sequence[KnownFinding],
     config: RunConfig | None,
+    verify_min_severity: Severity = "low",
 ) -> ReviewResult:
     log = get_logger()
     started = time.monotonic()
@@ -139,6 +145,15 @@ async def _run_review(
     if skipped:
         log.info("known_findings_skipped", findings=skipped)
     fresh = [f for f in review.findings if f.id not in skipped]
+    floor = SEVERITY_ORDER[verify_min_severity]
+    to_verify = [f for f in fresh if SEVERITY_ORDER[f.severity] <= floor]
+    if len(to_verify) < len(fresh):
+        log.info(
+            "verification_skipped_below_floor",
+            floor=verify_min_severity,
+            findings=[f.id for f in fresh if f not in to_verify],
+        )
+    fresh = to_verify
 
     if verify and fresh:
         outcomes = await _verify_all(context, agent, fresh, verify_concurrency)

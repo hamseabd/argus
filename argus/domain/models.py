@@ -281,6 +281,7 @@ class RunConfig(_Model):
     verifier_max_turns: int
     verifier_max_budget_usd: float
     verify_concurrency: int
+    verify_min_severity: str = "low"
     diff_size_cap: int
     fingerprint: str = Field(
         default="",
@@ -330,6 +331,7 @@ class PRInfo(_Model):
     head_ref: str
     head_sha: str
     html_url: str
+    base_sha: str = ""
 
 
 class Increment(_Model):

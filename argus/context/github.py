@@ -15,9 +15,10 @@ import httpx
 
 from argus import __version__
 from argus.context.diff import DIFF_SIZE_CAP, cap_diff, matches_ignore, parse_diff, split_ignored
-from argus.context.git import run_git
+from argus.context.git import diff_between, run_git
 from argus.domain.errors import GitError, GitHubError
 from argus.domain.models import ChangedFile, ChangedFileStatus, PRInfo, ReviewContext
+from argus.telemetry import get_logger
 
 API_URL = "https://api.github.com"
 API_VERSION = "2022-11-28"
@@ -25,6 +26,7 @@ JSON_MEDIA_TYPE = "application/vnd.github+json"
 DIFF_MEDIA_TYPE = "application/vnd.github.diff"
 RAW_MEDIA_TYPE = "application/vnd.github.raw+json"
 _PAGE_SIZE = 100
+_DIFF_TOO_LARGE = 406
 _STATUS_MAP: dict[str, ChangedFileStatus] = {
     "added": "added",
     "modified": "modified",
@@ -63,6 +65,7 @@ class GitHubClient:
             head_ref=data["head"]["ref"],
             head_sha=data["head"]["sha"],
             html_url=data["html_url"],
+            base_sha=data["base"].get("sha") or "",
         )
 
     def pr_diff(self, owner: str, repo: str, number: int) -> str:
@@ -149,7 +152,7 @@ def pr_context(
     Ignored files leave both the diff and the changed-file list before the cap.
     """
     info = client.pr_info(owner, repo, number)
-    files, ignored = split_ignored(parse_diff(client.pr_diff(owner, repo, number)), ignore)
+    files, ignored = split_ignored(parse_diff(_pr_diff(client, info, repo_root)), ignore)
     diff_text, truncated = cap_diff(files, max_bytes)
     changed = [
         f for f in client.pr_files(owner, repo, number) if not matches_ignore(f.path, ignore)
@@ -163,6 +166,28 @@ def pr_context(
         ignored_files=[f.path for f in ignored],
         pr=info,
     )
+
+
+def _pr_diff(client: GitHubClient, info: PRInfo, repo_root: Path) -> str:
+    """The pull request's diff from GitHub, or from the checkout when GitHub will not serve it.
+
+    The API refuses a diff past its size limits (406). The review workflow
+    checks out the pull request with full history, so the same diff, from
+    the merge base of base and head to head, is computed locally instead.
+    """
+    try:
+        return client.pr_diff(info.owner, info.repo, info.number)
+    except GitHubError as exc:
+        if exc.status != _DIFF_TOO_LARGE or not info.base_sha:
+            raise
+        try:
+            text = diff_between(repo_root, info.base_sha, info.head_sha)
+        except GitError as git_exc:
+            raise GitHubError(
+                exc.status, f"{exc.body}; the local checkout could not diff it either: {git_exc}"
+            ) from git_exc
+        get_logger().warning("pr_diff_from_checkout", status=exc.status, pr=info.number)
+        return text
 
 
 def parse_repo(value: str) -> tuple[str, str]:

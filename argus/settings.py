@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from argus import __version__
 from argus.context.diff import DIFF_SIZE_CAP
-from argus.domain.models import RunConfig
+from argus.domain.models import RunConfig, Severity
 from argus.telemetry import LogFormat, LogLevel
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     verifier_max_turns: int = Field(default=10, ge=1)
     verifier_max_budget_usd: float = Field(default=0.5, gt=0)
     verify_concurrency: int = Field(default=4, ge=1)
+    verify_min_severity: Severity = Field(
+        default="low",
+        description="Findings below this severity are reported unverified, not verified.",
+    )
 
     diff_size_cap: int = Field(default=DIFF_SIZE_CAP, ge=1)
     ignore_paths: str = Field(
@@ -109,5 +113,6 @@ class Settings(BaseSettings):
             verifier_max_turns=self.verifier_max_turns,
             verifier_max_budget_usd=self.verifier_max_budget_usd,
             verify_concurrency=self.verify_concurrency,
+            verify_min_severity=self.verify_min_severity,
             diff_size_cap=self.diff_size_cap,
         )

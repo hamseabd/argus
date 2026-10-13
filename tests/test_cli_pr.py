@@ -119,6 +119,7 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
         run_id=None,
         known=(),
         config=None,
+        verify_min_severity="low",
     ):
         calls["context"] = context
         calls["known"] = list(known)
