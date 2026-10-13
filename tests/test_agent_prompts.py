@@ -6,7 +6,11 @@ from argus.domain.models import ChangedFile, Finding, PRInfo, ReviewContext
 FIXTURES = Path(__file__).parent / "fixtures" / "diffs"
 
 
-def context(pr: PRInfo | None = None, truncated: list[str] | None = None) -> ReviewContext:
+def context(
+    pr: PRInfo | None = None,
+    truncated: list[str] | None = None,
+    ignored: list[str] | None = None,
+) -> ReviewContext:
     return ReviewContext(
         source="pr" if pr else "local",
         repo_root=Path("/repo"),
@@ -16,6 +20,7 @@ def context(pr: PRInfo | None = None, truncated: list[str] | None = None) -> Rev
             ChangedFile(path="pkg/new_name.py", status="renamed", previous_path="pkg/old_name.py"),
         ],
         truncated_files=truncated or [],
+        ignored_files=ignored or [],
         pr=pr,
     )
 
@@ -141,3 +146,15 @@ def test_verifier_user_prompt_carries_the_finding_and_its_hunk() -> None:
         "```diff",
     ):
         assert expected in text
+
+
+def test_lead_user_prompt_lists_ignored_files_as_excluded_not_to_be_read() -> None:
+    text = lead_user_prompt(context(ignored=["uv.lock", "web/package-lock.json"]))
+    plain = lead_user_prompt(context())
+
+    assert "## Files excluded from the review" in text
+    assert "- uv.lock" in text
+    assert "- web/package-lock.json" in text
+    assert "not in the diff" in text
+    assert "need no reading" not in text
+    assert "excluded" not in plain

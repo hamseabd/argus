@@ -6,13 +6,14 @@ transport failure becomes a GitHubError carrying the status and body.
 """
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from argus import __version__
-from argus.context.diff import DIFF_SIZE_CAP, cap_diff, parse_diff
+from argus.context.diff import DIFF_SIZE_CAP, cap_diff, matches_ignore, parse_diff, split_ignored
 from argus.context.git import run_git
 from argus.domain.errors import GitError, GitHubError
 from argus.domain.models import ChangedFile, ChangedFileStatus, PRInfo, ReviewContext
@@ -99,16 +100,25 @@ def pr_context(
     number: int,
     repo_root: Path,
     max_bytes: int = DIFF_SIZE_CAP,
+    ignore: Sequence[str] = (),
 ) -> ReviewContext:
-    """Everything the review stage needs for a pull request, with the size cap applied."""
+    """Everything the review stage needs for a pull request, with the size cap applied.
+
+    Ignored files leave both the diff and the changed-file list before the cap.
+    """
     info = client.pr_info(owner, repo, number)
-    diff_text, truncated = cap_diff(parse_diff(client.pr_diff(owner, repo, number)), max_bytes)
+    files, ignored = split_ignored(parse_diff(client.pr_diff(owner, repo, number)), ignore)
+    diff_text, truncated = cap_diff(files, max_bytes)
+    changed = [
+        f for f in client.pr_files(owner, repo, number) if not matches_ignore(f.path, ignore)
+    ]
     return ReviewContext(
         source="pr",
         repo_root=repo_root,
         diff_text=diff_text,
-        files=client.pr_files(owner, repo, number),
+        files=changed,
         truncated_files=truncated,
+        ignored_files=[f.path for f in ignored],
         pr=info,
     )
 

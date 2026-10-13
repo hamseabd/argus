@@ -222,3 +222,9 @@ def test_rank_returns_a_new_list_and_leaves_input_alone() -> None:
 
     assert len(findings) == 2
     assert ranked is not findings
+
+
+def test_review_context_ignored_files_default_to_none() -> None:
+    ctx = ReviewContext(source="local", repo_root=Path("/r"), diff_text="", files=[])
+
+    assert ctx.ignored_files == []
