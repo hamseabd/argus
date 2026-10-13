@@ -271,3 +271,10 @@ def test_a_re_review_shows_only_the_increment_and_says_so() -> None:
     assert "pkg/fix.py (modified)" in text
     assert "+fixed" in text
     assert "pkg/module.py" not in text  # the rest of the pull request was reviewed before
+
+
+def test_the_verifier_is_told_a_rejection_stays_visible() -> None:
+    text = load_prompt("verifier")
+
+    assert "dropped from the review" not in text
+    assert "still shown" in text

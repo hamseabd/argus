@@ -251,7 +251,7 @@ def render_markdown(scores_by_mode: Mapping[str, list[CaseScore]]) -> str:
         lines.append(
             f"| {mode} | {_pct(s.precision)} | {_pct(s.recall)} "
             f"| {_pct(s.clean_control_fp_rate)} ({s.clean_controls_flagged}/{s.clean_controls}) "
-            f"| {_pct(s.verifier_accuracy)} "
+            f"| {_pct(s.verifier_accuracy)}{_inconclusive(s.verifier_inconclusive)} "
             f"| {s.true_positives} / {s.false_positives} / {s.false_negatives} "
             f"| ${_num(s.mean_cost_usd, '.2f')} | {_num(s.mean_turns, '.1f')} "
             f"| {_num(latency, '.0f')} s | {s.errors} |"
@@ -301,6 +301,10 @@ def render_markdown(scores_by_mode: Mapping[str, list[CaseScore]]) -> str:
             f"| {case} | " + " | ".join(_case_cell(per_mode.get(m, [])) for m in modes) + " |"
         )
     return "\n".join(lines) + "\n"
+
+
+def _inconclusive(count: int) -> str:
+    return f" ({count} inconclusive)" if count else ""
 
 
 def _case_cell(runs: list[CaseScore]) -> str:
