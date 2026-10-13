@@ -250,3 +250,18 @@ def test_the_increment_respects_the_size_cap(pushed) -> None:
 
     assert increment is not None
     assert increment.truncated_files
+
+
+def test_a_merge_since_the_review_means_no_increment(pushed) -> None:
+    # Merging the base into the branch brings in code the pull request did not
+    # write; diffing from the reviewed commit would review all of it.
+    repo, reviewed, _ = pushed
+    git(repo, "checkout", "-q", "main")
+    (repo / "upstream.py").write_text("landed on main\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "elsewhere on main")
+    git(repo, "checkout", "-q", "feature")
+    git(repo, "merge", "-q", "--no-edit", "main")
+    head = git(repo, "rev-parse", "HEAD")
+
+    assert increment_since(repo, reviewed, head) is None
