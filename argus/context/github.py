@@ -107,6 +107,9 @@ class GitHubClient:
             params = None  # the next link carries its own query string
         return items
 
+    def default_branch(self, owner: str, repo: str) -> str:
+        return str(self._request("GET", f"/repos/{owner}/{repo}").json()["default_branch"])
+
     def file_text(self, owner: str, repo: str, path: str, ref: str) -> str:
         """A file's raw contents at a ref; a missing file is a GitHubError with status 404."""
         response = self._request(

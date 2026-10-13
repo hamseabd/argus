@@ -106,3 +106,11 @@ def test_the_rendered_table_has_a_row_per_category_and_status() -> None:
     assert "| security | 1 | 1 | 0 | 50% |" in text
     assert "| confirmed | 1 | 1 | 0 | 50% |" in text
     assert "2 findings posted, 2 rated" in text
+
+
+def test_a_comment_posted_before_findings_carried_a_status_still_counts() -> None:
+    old = argus_comment(1, 7, up=1) | {"body": "**[HIGH] Leak** · correctness · confidence 0.90"}
+
+    (record,) = collect_feedback([old], LOGIN)
+
+    assert (record.title, record.category, record.status) == ("Leak", "correctness", "")

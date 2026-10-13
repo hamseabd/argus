@@ -32,6 +32,8 @@ KNOWN_LINE_TOLERANCE = 2
 
 MAX_FINDINGS = 25
 MAX_TITLE_LENGTH = 100
+MAX_REPLACEMENT_LENGTH = 4000
+"""A replacement longer than this is a rewrite, not a fix confined to the finding's lines."""
 
 
 class _Model(BaseModel):
@@ -53,6 +55,7 @@ class Finding(_Model):
     suggested_fix: str | None = None
     replacement: str | None = Field(
         default=None,
+        max_length=MAX_REPLACEMENT_LENGTH,
         description=(
             "The exact new text of lines line..end_line, offered as a one-click suggestion. "
             "Only for a fix confined to those lines; empty deletes them."
@@ -281,7 +284,7 @@ class RunConfig(_Model):
     verifier_max_turns: int
     verifier_max_budget_usd: float
     verify_concurrency: int
-    verify_min_severity: str = "low"
+    verify_min_severity: Severity = "low"
     diff_size_cap: int
     fingerprint: str = Field(
         default="",

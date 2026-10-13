@@ -74,6 +74,9 @@ class FakeGitHub:
     def pr_review_comments(self, owner: str, repo: str, number: int) -> list[dict]:
         return self.calls.get("comments", [])
 
+    def default_branch(self, owner: str, repo: str) -> str:
+        return "main"
+
     def file_text(self, owner: str, repo: str, path: str, ref: str) -> str:
         raise GitHubError(404, "Not Found")
 
@@ -407,11 +410,11 @@ def test_full_reviews_the_whole_pull_request_but_still_skips_known_findings(
     assert stubbed["fetched_known"] is True
 
 
-def test_pr_review_reads_the_rules_at_the_base_branch(stubbed: dict, monkeypatch) -> None:
+def test_pr_review_reads_the_rules_of_the_repository(stubbed: dict, monkeypatch) -> None:
     asked: list = []
 
-    def fake_rules(client, owner, repo, ref):
-        asked.append((owner, repo, ref))
+    def fake_rules(client, owner, repo):
+        asked.append((owner, repo))
         return "Prefer explicit errors.\n"
 
     monkeypatch.setattr(cli, "rules_from_github", fake_rules)
@@ -419,7 +422,7 @@ def test_pr_review_reads_the_rules_at_the_base_branch(stubbed: dict, monkeypatch
     result = runner.invoke(cli.app, ["review", "--pr", "7", "--repo", "o/r"])
 
     assert result.exit_code == 0, result.output
-    assert asked == [("o", "r", "main")]
+    assert asked == [("o", "r")]
     assert stubbed["context"].review_rules == "Prefer explicit errors.\n"
 
 
@@ -527,3 +530,16 @@ def test_open_findings_from_an_earlier_review_mean_the_whole_pull_request_again(
     assert result.exit_code == 0, result.output
     assert increments == []
     assert stubbed["context"].increment is None
+
+
+def test_the_check_run_is_posted_even_when_posting_the_review_fails(stubbed: dict) -> None:
+    # A required check must never be left missing because the review post failed.
+    stubbed["post_outcome"] = GitHubError(422, "Unprocessable Entity")
+
+    result = runner.invoke(
+        cli.app,
+        ["review", "--pr", "7", "--repo", "o/r", "--post", "--check", "--fail-on", "critical"],
+    )
+
+    assert result.exit_code == 1
+    assert "check" in stubbed
