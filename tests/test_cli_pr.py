@@ -505,3 +505,16 @@ def test_a_check_run_is_posted_even_on_a_head_already_reviewed(
     assert result.exit_code == 0, result.output
     assert increments == []
     assert "check" in stubbed
+
+
+def test_the_check_run_is_posted_even_when_posting_the_review_fails(stubbed: dict) -> None:
+    # A required check must never be left missing because the review post failed.
+    stubbed["post_outcome"] = GitHubError(422, "Unprocessable Entity")
+
+    result = runner.invoke(
+        cli.app,
+        ["review", "--pr", "7", "--repo", "o/r", "--post", "--check", "--fail-on", "critical"],
+    )
+
+    assert result.exit_code == 1
+    assert "check" in stubbed

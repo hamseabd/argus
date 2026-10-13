@@ -221,12 +221,14 @@ def review(
         if summary_path is not None:
             _append_summary(summary_path, render_summary(result, context))
         typer.echo(render_report(result), nl=False)
+        # The check run goes first: a required check must be posted on every
+        # head, even when posting the review then fails.
+        if check and target is not None:
+            _post_check_run(target.client, context, result, fail_on)
         if post and target is not None:
             url = _post_review(target.client, context, result)
             if summary_path is not None:
                 _append_summary(summary_path, f"Posted: {url}\n")
-        if check and target is not None:
-            _post_check_run(target.client, context, result, fail_on)
     # With --check the check run's conclusion is the gate; failing the job as well
     # would make a gated merge read the same as Argus crashing.
     if not check and fail_on is not None and gate_tripped(result.review.findings, fail_on):
