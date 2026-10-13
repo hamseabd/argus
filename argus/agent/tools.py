@@ -1,8 +1,11 @@
-"""The one custom tool Argus gives its reviewers: read-only git history.
+"""The custom tools Argus serves in process: read-only git history, and finding reports.
+
+report_finding lives in argus.agent.findings; this module serves it next to
+git_history on the same in-process server, for the review stage only.
 
 Reviewers and the verifier need to tell a regression from an intentional
 change, and that is a question for git log. They do not get Bash, so this
-in-process MCP server exposes exactly one query: which commits touched a
+git_history tool answers exactly one query: which commits touched a
 line range of a file. It never runs anything but read-only git commands,
 and it refuses paths outside the repository root.
 
@@ -27,6 +30,7 @@ from claude_agent_sdk import (
 )
 
 from argus import __version__
+from argus.agent.findings import REPORT_TOOL, FindingCollector, report_finding_tool
 from argus.context.diff import HUNK_HEADER
 from argus.context.git import run_git
 from argus.domain.errors import GitError
@@ -34,6 +38,7 @@ from argus.domain.errors import GitError
 SERVER_NAME = "argus"
 TOOL_NAME = "git_history"
 GIT_HISTORY_TOOL_NAME = f"mcp__{SERVER_NAME}__{TOOL_NAME}"
+REPORT_FINDING_TOOL_NAME = f"mcp__{SERVER_NAME}__{REPORT_TOOL}"
 MAX_COMMITS = 20
 UNCOMMITTED: dict[str, str] = {
     "sha": "",
@@ -124,9 +129,21 @@ def git_history_tool(repo_root: Path) -> SdkMcpTool[Any]:
     return handler
 
 
-def build_argus_server(repo_root: Path) -> McpSdkServerConfig:
+def argus_tools(
+    repo_root: Path, collector: FindingCollector | None = None
+) -> list[SdkMcpTool[Any]]:
+    """git_history always; report_finding for a query that records findings (the review stage)."""
+    tools = [git_history_tool(repo_root)]
+    if collector is not None:
+        tools.append(report_finding_tool(collector))
+    return tools
+
+
+def build_argus_server(
+    repo_root: Path, collector: FindingCollector | None = None
+) -> McpSdkServerConfig:
     return create_sdk_mcp_server(
-        name=SERVER_NAME, version=__version__, tools=[git_history_tool(repo_root)]
+        name=SERVER_NAME, version=__version__, tools=argus_tools(repo_root, collector)
     )
 
 

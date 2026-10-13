@@ -53,6 +53,9 @@ class Finding(_Model):
     suggested_fix: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     status: Status = "pending"
+    reported_by: str | None = Field(
+        default=None, description='Pipeline-assigned: the agent that reported it, e.g. "security".'
+    )
 
     @model_validator(mode="after")
     def _end_line_follows_line(self) -> "Finding":
@@ -152,6 +155,32 @@ class Review(_Model):
         if duplicates:
             raise ValueError(f"duplicate finding ids: {', '.join(sorted(duplicates))}")
         return findings
+
+
+class DroppedFinding(_Model):
+    """A recorded finding the lead leaves out of the review, and why."""
+
+    id: str = Field(description="The id report_finding answered with, e.g. F3.")
+    reason: str = Field(description="Why: a duplicate of which id, or which standard it fails.")
+
+
+class Triage(_Model):
+    """The lead reviewer's answer: the specialists record findings, the lead triages them.
+
+    Findings arrive through a tool, validated one at a time, so the lead never
+    re-types them; it says what the change does and which recorded findings
+    to drop, and every other one goes to the verifier.
+    """
+
+    summary: str = Field(description="Two to five sentences.")
+    files_reviewed: list[str]
+    dropped: list[DroppedFinding] = Field(
+        description="Recorded findings to leave out: duplicates and ones below the standard."
+    )
+
+    @property
+    def dropped_ids(self) -> set[str]:
+        return {d.id for d in self.dropped}
 
 
 class Verdict(_Model):

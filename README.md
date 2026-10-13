@@ -21,7 +21,7 @@ The verifier confirmed it, and the fix landed with a test before merge.
 ## What it does
 
 - **Reviews a pull request or a local diff.** `argus review --pr 7 --post` or `argus review --diff --base main`.
-- **Orchestrates specialists.** One `query()` runs a lead reviewer on Opus as the orchestrator: it must delegate to `correctness`, `security`, and `quality` subagents on Sonnet in one turn (fan-out), then merges and de-duplicates what they return (fan-in). The lead does not re-check findings itself; that is the verifier's job.
+- **Orchestrates specialists.** One `query()` runs a lead reviewer on Opus as the orchestrator: it must delegate to `correctness`, `security`, and `quality` subagents on Sonnet in one turn (fan-out). Each specialist records its findings through a `report_finding` tool that validates them on the spot, and the lead triages what was recorded by id, dropping duplicates (fan-in), so no finding is re-typed by another model on its way to the verifier. The lead does not re-check findings itself; that is the verifier's job.
 - **Verifies before it reports.** Every finding gets its own fresh verifier query whose only job is to refute it by reading the code. Rejected findings are dropped; failed verifications are reported as `unverified`, never as confirmed.
 - **Posts inline.** A finding lands as a review comment on its line when that line is in the diff, otherwise in the review body. The review never requests changes; merge gating is the CLI exit code.
 - **Does not repeat itself.** On a re-review it reads its own earlier reviews on the pull request first. A finding that repeats one already posted, same file and title, or same file within two lines with the same category and severity, is marked `known` before verification: not re-verified, not posted again, counted in the report, and still gated, since reported before is not fixed. `--include-known` turns this off.
@@ -80,7 +80,7 @@ Python is the harness and owns the pipeline; the SDK owns the fan-out inside the
 |---|---|---|
 | Domain | `argus/domain/` | Pydantic models (`Finding`, `Review`, `Verdict`, `ReviewResult`) and typed errors. No SDK imports. |
 | Context | `argus/context/` | Unified diff parser with the commentable-line index and a 200 KB size cap; local diff via git; GitHub client. |
-| Agent | `argus/agent/` | The only package that imports `claude_agent_sdk`: options, output schemas, hooks, the `git_history` MCP tool, the runner, and the prompts. |
+| Agent | `argus/agent/` | The only package that imports `claude_agent_sdk`: options, output schemas, hooks, the `git_history` and `report_finding` MCP tools, the runner, and the prompts. |
 | Pipeline | `argus/pipeline.py` | Stage orchestration over domain types, behind a `ReviewAgent` protocol so it is tested with a fake agent. |
 | Report | `argus/report/` | Terminal Markdown and the GitHub review payload. |
 | CLI | `argus/cli.py` | Typer. Imports the SDK lazily so `argus version` and the pipeline never load it. |
@@ -91,8 +91,9 @@ That boundary is enforced by a test: a source scan proves only `argus/agent/` me
 ### How a review runs
 
 1. **Context.** PR mode fetches the diff, changed files, and metadata from the GitHub REST API. Local mode diffs from the merge base with the base branch to the working tree. Files matching an ignore pattern leave the diff first: minified bundles by default (`ARGUS_IGNORE_PATHS`, plus `--ignore` for one run), since a minified file cannot be read as a diff; the lead is told they changed and not to spend its reads on them, and the posted review names them as not reviewed, so a file cannot drop out of sight by its name alone. Then files are dropped from what remains, largest first, until it fits the context budget; the lead is told which ones to read directly.
-2. **Review.** The lead gets the change and must delegate to all three specialists in one turn. Each specialist returns a JSON array of findings.
-The lead merges them and answers with a `Review` as structured output, validated by the SDK against a JSON Schema derived from the domain model and re-validated by Pydantic. The schema puts a length floor on the summary (and on the verifier's reasoning), so a placeholder that merely fits the shape is rejected and the model has to write the real thing; how many outputs were rejected before one validated is part of every stage's metrics.
+2. **Review.** The lead gets the change and must delegate to all three specialists in one turn. Each specialist records every finding with `report_finding`, an in-process MCP tool that validates it against the domain model and against the repository (the file must exist, the line must be in it) and answers with an id such as `F3`, or with what to fix. A hook credits each id to the agent that reported it, so every finding carries `reported_by`.
+The specialists answer with one line per id, and the lead answers with a `Triage` as structured output: a summary, the files reviewed, and the ids to drop as duplicates or below the standard, with reasons. Argus builds the `Review` from every recorded finding the lead did not drop; the lead never copies a finding, so none is lost or altered between the specialist and the verifier, and the most expensive model writes a few ids rather than every finding again.
+Structured output is validated by the SDK against a JSON Schema derived from the domain model and re-validated by Pydantic. The schema puts a length floor on the summary, on the verifier's reasoning, and on a finding's description and evidence, so a placeholder that merely fits the shape is rejected and the model has to write the real thing; how many outputs were rejected before one validated is part of every stage's metrics.
 The lead gets a small budget of its own reads (ten), enforced by a hook: once it runs out, reading is refused and the only move left is to answer. The budget never refuses delegation or the answer itself.
 The bundled CLI runs an Agent call in the background by default and ignores `background: false` on the agent definition, so a specialist could report after the lead had answered; its late report started another lead turn that ended in plain text or over budget, and the run failed with nothing posted.
 Three layers keep that from failing a review.
@@ -106,14 +107,14 @@ Held and recovered answers are counted in the stage metrics and the report foote
 
 ### Read-only guarantees
 
-- `tools` and `allowed_tools` restrict the model to `Read`, `Grep`, `Glob`, `Agent`, and `mcp__argus__git_history`: least privilege at the tool layer.
+- `tools` and `allowed_tools` restrict the model to `Read`, `Grep`, `Glob`, `Agent`, `mcp__argus__git_history`, and, in the review stage, `mcp__argus__report_finding`, which only records a finding in memory: least privilege at the tool layer.
 - A `PreToolUse` hook denies `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`, `WebFetch`, and `WebSearch` with a reason the model can read, so it does not retry.
 - A second `PreToolUse` hook confines `Read`, `Grep`, and `Glob` to the repository under review. Each path is resolved with symlinks followed and refused if it leaves the repository or enters `.git`, so a prompt injection, or a symlink the change adds, cannot point a reviewer at `/proc/self/environ` or the CLI's credentials and have the contents quoted in a posted finding.
 - The CLI process inherits the review step's environment, so the GitHub, LangSmith, and app credentials are blanked in it; it keeps only the Claude token it runs on. The pull request checkout keeps no token in its git config (`persist-credentials: false`).
 - The pull request's title and description, and the diff, reach the lead inside code fences longer than any backtick run in them, labelled as data, so the author's text cannot close its block and pose as instructions.
 - Every string in the `ReviewResult` is scrubbed of token-shaped text (Claude, GitHub, and LangSmith formats) before the review is posted, the job summary written, or the JSON artifact kept.
 - `setting_sources=[]` isolates every query from the repository under review: its `.claude/` settings, hooks, and `CLAUDE.md` cannot reach the reviewer.
-- `git_history`, the one custom tool, is served by an in-process MCP server and runs `git log -L` for a line range and refuses paths outside the repository root. In local mode it maps working-tree line numbers to HEAD through the uncommitted hunks and labels lines that have no history yet.
+- `git_history`, the one custom tool that reads, is served by an in-process MCP server and runs `git log -L` for a line range and refuses paths outside the repository root. In local mode it maps working-tree line numbers to HEAD through the uncommitted hunks and labels lines that have no history yet.
 - The dogfood workflow installs and runs Argus from the default branch and only reads the pull request head, so the trust boundary is the checkout: a PR cannot execute its own code next to the token.
 
 ## Cost

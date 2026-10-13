@@ -12,16 +12,17 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from argus.domain.models import Finding, Review, Verdict
+from argus.domain.models import Finding, Triage, Verdict
 
 PIPELINE_OWNED: dict[type[BaseModel], frozenset[str]] = {
-    Finding: frozenset({"id", "status"}),
+    Finding: frozenset({"id", "status", "reported_by"}),
     Verdict: frozenset({"finding_id"}),
 }
 """Fields the pipeline fills in; the model never sees them in its output schema."""
 PROSE_MIN_LENGTH: dict[type[BaseModel], dict[str, int]] = {
-    Review: {"summary": 80},
+    Triage: {"summary": 80},
     Verdict: {"reasoning": 80},
+    Finding: {"description": 20, "evidence": 20},
 }
 """Length floors for the prose the prompts size as "two to five sentences".
 
@@ -33,10 +34,18 @@ can still build a Review or Verdict from any source.
 _DROPPED_KEYWORDS = {"default", "title"}
 
 
-def review_schema() -> dict[str, Any]:
-    schema = _strict(Review.model_json_schema())
-    _remove_properties(schema["properties"]["findings"]["items"], PIPELINE_OWNED[Finding])
-    _require_prose(schema, PROSE_MIN_LENGTH[Review])
+def triage_schema() -> dict[str, Any]:
+    """The lead's answer: a summary, the files reviewed, and the recorded findings to drop."""
+    schema = _strict(Triage.model_json_schema())
+    _require_prose(schema, PROSE_MIN_LENGTH[Triage])
+    return schema
+
+
+def finding_input_schema() -> dict[str, Any]:
+    """What report_finding takes: one Finding without the fields the pipeline fills in."""
+    schema = _strict(Finding.model_json_schema())
+    _remove_properties(schema, PIPELINE_OWNED[Finding])
+    _require_prose(schema, PROSE_MIN_LENGTH[Finding])
     return schema
 
 

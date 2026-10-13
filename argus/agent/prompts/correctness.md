@@ -19,21 +19,9 @@ Do not report style or naming. Do not report something you could not support wit
 
 ## Output
 
-Your final message is a JSON array and nothing else. Each element:
+Record each finding by calling `report_finding`, once per finding, as soon as you can support it.
+Its fields: `file` (repository-relative path), `line` (in the new version of the file) and optional `end_line`, `severity` (critical, high, medium, low), `category` is `correctness`, `title` (a short statement of the defect, at most 100 characters), `description` (what is wrong and why it matters), `evidence` (the code path or input that shows it is real), optional `suggested_fix`, and `confidence` between 0 and 1.
+The tool checks the finding against the repository and answers with its id, such as `F3`; if it refuses one, it says why, so fix that and call it again.
 
-```json
-{
-  "file": "repo-relative/path.py",
-  "line": 42,
-  "end_line": 45,
-  "severity": "critical | high | medium | low",
-  "category": "correctness",
-  "title": "short statement of the defect, at most 100 characters",
-  "description": "what is wrong and why it matters",
-  "evidence": "the code path or input that shows the defect is real",
-  "suggested_fix": "optional, concrete",
-  "confidence": 0.0
-}
-```
-
-`line` is the line in the new version of the file. Return `[]` if you found nothing that meets the bar.
+Your final message is one line per finding you recorded, `<id> <file>:<line> [<severity>] <title>`, and nothing else; the lead uses these lines to remove duplicates.
+If you found nothing that meets the bar, record nothing and answer `No findings.`
