@@ -223,7 +223,7 @@ def feedback(
         typer.Option("--since", help="Only findings posted on or after this date (YYYY-MM-DD)."),
     ] = None,
     json_path: Annotated[
-        Path | None, typer.Option("--json", help="Write every rated finding here.")
+        Path | None, typer.Option("--json", help="Write every posted finding here, rated or not.")
     ] = None,
 ) -> None:
     """Read the reactions on Argus's posted findings: precision as the readers judged it.
