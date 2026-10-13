@@ -14,9 +14,9 @@ from argus.auth import credential_problem, credential_source
 from argus.context.git import head_sha, local_context, repo_root
 from argus.context.github import GitHubClient, parse_repo, pr_context, repo_from_remote
 from argus.domain.errors import ArgusError, GitHubError
-from argus.domain.models import SEVERITY_ORDER, Finding, ReviewContext, ReviewResult
+from argus.domain.models import SEVERITY_ORDER, Finding, KnownFinding, ReviewContext, ReviewResult
 from argus.pipeline import run_review
-from argus.report.github_review import build_review
+from argus.report.github_review import build_review, known_findings_from
 from argus.report.markdown import render_report
 from argus.settings import Settings
 
@@ -82,6 +82,13 @@ def review(
             ),
         ),
     ] = None,
+    include_known: Annotated[
+        bool,
+        typer.Option(
+            "--include-known",
+            help="Report findings an earlier Argus review already posted on the pull request.",
+        ),
+    ] = False,
     no_verify: Annotated[bool, typer.Option("--no-verify", help="Skip the verify stage.")] = False,
     fail_on: Annotated[
         str | None,
@@ -119,6 +126,7 @@ def review(
         from argus.agent.review import SdkReviewAgent  # keep the SDK import lazy
 
         patterns = (*settings.ignore_patterns, *(ignore or ()))
+        known: list[KnownFinding] = []
         try:
             if target is None:
                 context = local_context(Path.cwd(), base, settings.diff_size_cap, ignore=patterns)
@@ -134,6 +142,14 @@ def review(
                     ignore=patterns,
                 )
                 _warn_on_head_mismatch(context)
+                if not include_known:
+                    known = _known_findings(
+                        target.client,
+                        target.owner,
+                        target.repo,
+                        target.number,
+                        settings.reviewer_login,
+                    )
             if not context.files and not context.diff_text.strip():
                 _fail(_nothing_to_review(context))
             result = asyncio.run(
@@ -143,6 +159,7 @@ def review(
                     verify=not no_verify,
                     verify_concurrency=settings.verify_concurrency,
                     run_id=run_id,
+                    known=known,
                 )
             )
         except ArgusError as exc:
@@ -166,9 +183,33 @@ def _nothing_to_review(context: ReviewContext) -> str:
 
 
 def gate_tripped(findings: list[Finding], fail_on: str) -> bool:
-    """True if a confirmed or unverified finding is at or above the severity."""
+    """True if any finding not refuted is at or above the severity.
+
+    A known finding counts: reported once before is not fixed, so an open
+    critical still fails the gate however many times Argus has seen it.
+    """
     threshold = SEVERITY_ORDER[fail_on]
     return any(f.status != "rejected" and SEVERITY_ORDER[f.severity] <= threshold for f in findings)
+
+
+def _known_findings(
+    client: GitHubClient, owner: str, repo: str, number: int, reviewer_login: str
+) -> list[KnownFinding]:
+    """What earlier Argus reviews already posted on the pull request.
+
+    Without a configured login there is no identity to trust, so nothing is
+    fetched and every finding is reported; the workflow sets it from the app.
+    """
+    if not reviewer_login:
+        telemetry.get_logger().info("known_findings_skipped", reason="no_reviewer_login")
+        return []
+    known = known_findings_from(
+        client.pr_reviews(owner, repo, number),
+        client.pr_review_comments(owner, repo, number),
+        reviewer_login,
+    )
+    telemetry.get_logger().info("known_findings", count=len(known), reviewer=reviewer_login)
+    return known
 
 
 def _check_credentials() -> None:

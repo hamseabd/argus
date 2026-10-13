@@ -74,8 +74,11 @@ def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             ignored_files=calls.get("ignored_files", []),
         )
 
-    async def fake_run_review(context, agent, *, verify=True, verify_concurrency=4, run_id=None):
+    async def fake_run_review(
+        context, agent, *, verify=True, verify_concurrency=4, run_id=None, known=()
+    ):
         calls["run_id"] = run_id
+        calls["known"] = list(known)
         calls["verify"] = verify
         calls["verify_concurrency"] = verify_concurrency
         calls["agent"] = agent
@@ -291,3 +294,17 @@ def test_a_diff_that_is_entirely_ignored_says_so(stubbed: dict) -> None:
     assert "nothing to review" in result.output
     assert "uv.lock" in result.output
     assert "agent" not in stubbed
+
+
+def test_local_mode_has_no_earlier_reviews_to_consult(stubbed: dict) -> None:
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert stubbed["known"] == []
+
+
+def test_fail_on_still_counts_findings_already_reported(stubbed: dict) -> None:
+    """Reported once before is not fixed; an open critical still fails the gate."""
+    stubbed["outcome"] = fake_result([finding("critical", status="known")])
+
+    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "low"]).exit_code == 3

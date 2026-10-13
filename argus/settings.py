@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     def ignore_patterns(self) -> tuple[str, ...]:
         return tuple(p.strip() for p in self.ignore_paths.split(",") if p.strip())
 
+    reviewer_login: str = Field(
+        default="",
+        description=(
+            "The GitHub login Argus posts reviews as (the app slug plus [bot]). Only that "
+            "login's earlier reviews are read back as known findings; unset, none are."
+        ),
+    )
     log_format: LogFormat = "auto"
     log_level: LogLevel = "info"
     trace_content: bool = Field(

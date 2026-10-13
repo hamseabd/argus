@@ -213,3 +213,24 @@ def test_pr_context_drops_ignored_files_from_the_diff_and_the_file_list(tmp_path
     assert ctx.diff_text == DIFF
     assert ctx.files == [ChangedFile(path="app/cache.py", status="modified")]
     assert ctx.ignored_files == ["uv.lock"]
+
+
+@respx.mock
+def test_pr_reviews_and_review_comments_paginate() -> None:
+    reviews = respx.get(f"{API}/repos/o/r/pulls/7/reviews")
+    reviews.side_effect = [
+        httpx.Response(
+            200,
+            json=[{"id": 1, "body": "a"}],
+            headers={"Link": f'<{API}/repos/o/r/pulls/7/reviews?page=2>; rel="next"'},
+        ),
+        httpx.Response(200, json=[{"id": 2, "body": "b"}]),
+    ]
+    comments = respx.get(f"{API}/repos/o/r/pulls/7/comments").mock(
+        return_value=httpx.Response(200, json=[{"id": 9, "body": "c"}])
+    )
+
+    assert [r["id"] for r in client().pr_reviews("o", "r", 7)] == [1, 2]
+    assert [c["id"] for c in client().pr_review_comments("o", "r", 7)] == [9]
+    assert reviews.call_count == 2
+    assert comments.calls.last.request.url.params["per_page"] == "100"

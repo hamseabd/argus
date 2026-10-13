@@ -86,3 +86,9 @@ def test_an_empty_ignore_paths_turns_the_filter_off(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("ARGUS_IGNORE_PATHS", "")
 
     assert Settings(_env_file=None).ignore_patterns == ()
+
+
+def test_reviewer_login_is_unset_by_default_and_env_overridable(monkeypatch) -> None:
+    assert Settings(_env_file=None).reviewer_login == ""
+    monkeypatch.setenv("ARGUS_REVIEWER_LOGIN", "argus-code-reviewer-agent[bot]")
+    assert Settings(_env_file=None).reviewer_login == "argus-code-reviewer-agent[bot]"

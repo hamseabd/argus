@@ -49,6 +49,13 @@ def test_ci_type_checks_the_package_between_format_and_tests() -> None:
     assert commands["Type check"] == "uv run mypy"
 
 
+def test_review_step_tells_argus_the_app_identity_it_posts_as() -> None:
+    """Only this login's earlier reviews are trusted; it comes from the minted app, not a guess."""
+    review = next(s for s in steps("review.yml", "review") if s.get("name") == "Review")
+
+    assert review["env"]["ARGUS_REVIEWER_LOGIN"] == "${{ steps.argus-app.outputs.app-slug }}[bot]"
+
+
 def test_review_skips_drafts_and_fork_pull_requests() -> None:
     condition = load("review.yml")["jobs"]["review"]["if"]
 
@@ -120,6 +127,7 @@ def test_review_step_uses_only_the_subscription_token_and_posts_with_an_artifact
         "CLAUDE_CODE_OAUTH_TOKEN",
         "GITHUB_TOKEN",
         "ARGUS_LOG_FORMAT",
+        "ARGUS_REVIEWER_LOGIN",
         "LANGSMITH_API_KEY",
     }
     assert review["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
