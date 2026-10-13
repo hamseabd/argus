@@ -117,6 +117,33 @@ def test_verifier_prompt_tries_to_refute() -> None:
     assert "rejected" in text
 
 
+def test_the_verifier_may_say_it_cannot_tell_instead_of_rejecting() -> None:
+    # Rejecting what it cannot settle hid real bugs: a rejected finding is dropped.
+    text = load_prompt("verifier")
+
+    assert "`inconclusive`" in text
+    assert "reject with a low confidence" not in text
+
+
+def test_the_verifier_is_not_told_how_sure_the_reporter_was() -> None:
+    finding = Finding(
+        id="security-1",
+        file="a.py",
+        line=1,
+        severity="high",
+        category="security",
+        title="t",
+        description="d",
+        evidence="e",
+        confidence=0.97,
+    )
+
+    text = verifier_user_prompt(finding, "")
+
+    assert "0.97" not in text
+    assert "onfidence" not in text
+
+
 def test_lead_user_prompt_lists_files_diff_and_truncation() -> None:
     text = lead_user_prompt(context(truncated=["big/generated.json"]))
 

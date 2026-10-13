@@ -184,10 +184,15 @@ class Triage(_Model):
 
 
 class Verdict(_Model):
-    """The verifier's judgement on one finding."""
+    """The verifier's judgement on one finding.
+
+    inconclusive is an answer, not a failure: the verifier read the code and
+    could not settle the claim from it. The finding stays unverified, so it is
+    still reported, marked as such, instead of being dropped as rejected.
+    """
 
     finding_id: str
-    verdict: Literal["confirmed", "rejected"]
+    verdict: Literal["confirmed", "rejected", "inconclusive"]
     reasoning: str
     confidence: float = Field(ge=0.0, le=1.0)
 

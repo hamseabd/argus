@@ -87,7 +87,6 @@ def verifier_user_prompt(finding: Finding, diff_section: str) -> str:
         f"- Severity: {finding.severity}",
         f"- Category: {finding.category}",
         f"- Title: {finding.title}",
-        f"- Confidence claimed by the reporter: {finding.confidence:.2f}",
         "",
         "## Description",
         "",

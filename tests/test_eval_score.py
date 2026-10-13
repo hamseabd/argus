@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from argus.domain.models import Finding, Review, ReviewResult, StageMetrics
+from argus.domain.models import Finding, Review, ReviewResult, StageMetrics, Verdict
 from evals.corpus import Case, ExpectedBug
 from evals.score import (
     MAX_SPAN,
@@ -403,3 +403,21 @@ def test_a_single_trial_adds_no_per_trial_line() -> None:
     table = render_markdown({"verify": [score_case(bug_case(SQLI), result(finding("a")))]})
 
     assert "per trial" not in table
+
+
+def test_inconclusive_verifications_are_counted_but_are_not_decisions() -> None:
+    unsure = finding("a", status="unverified")
+    scored = score_case(
+        bug_case(SQLI),
+        result(unsure).model_copy(
+            update={
+                "verdicts": [
+                    Verdict(finding_id="a", verdict="inconclusive", reasoning="r", confidence=0.2)
+                ]
+            }
+        ),
+    )
+
+    assert scored.verifier_inconclusive == 1
+    assert (scored.true_bugs_confirmed, scored.true_bugs_rejected) == (0, 0)
+    assert summarize([scored]).verifier_inconclusive == 1

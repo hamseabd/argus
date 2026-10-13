@@ -1,12 +1,24 @@
 """Markdown rendering shared by the terminal report and the GitHub review."""
 
-from argus.domain.models import AgentMetrics, Finding, ReviewResult, rank_findings
+from argus.domain.models import (
+    SEVERITY_ORDER,
+    AgentMetrics,
+    Finding,
+    ReviewResult,
+    Verdict,
+    rank_findings,
+)
 
 
 def render_report(result: ReviewResult) -> str:
-    """The terminal report: summary, ranked findings, metrics footer."""
+    """The terminal report: summary, ranked findings, the rejected ones folded, metrics footer."""
+    verdicts = verdicts_by_finding(result)
     parts = ["# Argus review", result.review.summary.strip(), render_counts(result.review.findings)]
-    parts.extend(render_finding(f) for f in rank_findings(result.review.findings))
+    parts.extend(
+        render_finding(f, verdict=verdicts.get(f.id)) for f in rank_findings(result.review.findings)
+    )
+    if rejected := render_rejected(result):
+        parts.append(rejected)
     parts.append("---")
     parts.append(render_footer(result))
     return "\n\n".join(parts) + "\n"
@@ -23,7 +35,7 @@ def render_counts(findings: list[Finding]) -> str:
         if (n := sum(f.status == status for f in shown))
     ]
     if rejected:
-        counts.append(f"{rejected} rejected and not shown")
+        counts.append(f"{rejected} rejected by the verifier")
     if known:
         counts.append(f"{known} already reported on this pull request and not shown")
     if not shown:
@@ -32,27 +44,58 @@ def render_counts(findings: list[Finding]) -> str:
     return f"{len(shown)} {noun}: {', '.join(counts)}."
 
 
-def render_finding(finding: Finding, heading: str = "##") -> str:
+def render_finding(finding: Finding, heading: str = "##", verdict: Verdict | None = None) -> str:
     """A finding as a titled section with its location on the line below."""
     lines = [
         f"{heading} [{finding.severity.upper()}] {finding.title}",
         "",
         f"`{finding.location}` · {_meta(finding)}",
         "",
-        *_details(finding),
+        *_details(finding, verdict),
     ]
     return "\n".join(lines)
 
 
-def finding_body(finding: Finding) -> str:
+def finding_body(finding: Finding, verdict: Verdict | None = None) -> str:
     """A finding as an inline comment body; the location is the comment's anchor."""
     return "\n".join(
         [
             f"**[{finding.severity.upper()}] {finding.title}** · {_meta(finding)}",
             "",
-            *_details(finding),
+            *_details(finding, verdict),
         ]
     )
+
+
+def verdicts_by_finding(result: ReviewResult) -> dict[str, Verdict]:
+    return {v.finding_id: v for v in result.verdicts}
+
+
+def render_rejected(result: ReviewResult) -> str | None:
+    """The findings the verifier rejected, folded, each with the verifier's reason.
+
+    Dropping them silently left no way to audit the verifier: a real bug it
+    talked itself out of would vanish. They are list items, not headings, so
+    nothing reads them back as findings that were reported.
+    """
+    rejected = sorted(
+        (f for f in result.review.findings if f.status == "rejected"),
+        key=lambda f: (SEVERITY_ORDER[f.severity], f.file, f.line),
+    )
+    if not rejected:
+        return None
+    verdicts = verdicts_by_finding(result)
+    noun = "finding" if len(rejected) == 1 else "findings"
+    lines = ["<details>", f"<summary>{len(rejected)} {noun} the verifier rejected</summary>", ""]
+    for f in rejected:
+        lines.append(
+            f"- **[{f.severity.upper()}] {f.title}** `{f.location}` · {f.category} "
+            f"· confidence {f.confidence:.2f}"
+        )
+        if (verdict := verdicts.get(f.id)) is not None:
+            lines.append(f"  Verifier ({verdict.confidence:.2f}): {_one_line(verdict.reasoning)}")
+    lines += ["", "</details>"]
+    return "\n".join(lines)
 
 
 def render_footer(result: ReviewResult) -> str:
@@ -114,8 +157,14 @@ def _meta(finding: Finding) -> str:
     return f"{finding.category} · {finding.status} · confidence {finding.confidence:.2f}"
 
 
-def _details(finding: Finding) -> list[str]:
+def _details(finding: Finding, verdict: Verdict | None = None) -> list[str]:
     lines = [finding.description.strip(), "", f"**Evidence:** {finding.evidence.strip()}"]
     if finding.suggested_fix:
         lines += ["", "**Suggested fix:**", "", "```", finding.suggested_fix.strip(), "```"]
+    if verdict is not None and verdict.verdict == "inconclusive":
+        lines += ["", f"**Verifier, inconclusive:** {_one_line(verdict.reasoning)}"]
     return lines
+
+
+def _one_line(text: str) -> str:
+    return " ".join(text.split())

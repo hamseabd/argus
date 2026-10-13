@@ -114,7 +114,7 @@ EXPECTED = """\
 
 Adds paging and a lookup. One real problem.
 
-2 findings: 1 confirmed, 1 unverified, 1 rejected and not shown.
+2 findings: 1 confirmed, 1 unverified, 1 rejected by the verifier.
 
 ## [CRITICAL] SQL built from user input
 
@@ -138,6 +138,14 @@ conn.execute(q, (name,))
 Dead code.
 
 **Evidence:** Nothing calls it.
+
+<details>
+<summary>1 finding the verifier rejected</summary>
+
+- **[HIGH] Rejected one** `a.py:8` · correctness · confidence 0.95
+  Verifier (0.80): The guard on line 6 returns early for an empty name.
+
+</details>
 
 ---
 
@@ -172,7 +180,16 @@ def test_report_renders_ranked_findings_and_the_footer() -> None:
         finding(),
     ]
 
-    assert render_report(result(findings)) == EXPECTED
+    verdicts = [
+        Verdict(
+            finding_id="correctness-1",
+            verdict="rejected",
+            reasoning="The guard on line 6 returns early for an empty name.",
+            confidence=0.8,
+        )
+    ]
+
+    assert render_report(result(findings, verdicts)) == EXPECTED
 
 
 def test_report_with_no_findings_says_so() -> None:
@@ -186,7 +203,7 @@ def test_report_with_no_findings_says_so() -> None:
 def test_report_with_only_rejected_findings_says_so() -> None:
     text = render_report(result([finding(status="rejected")]))
 
-    assert "No findings. 1 rejected and not shown." in text
+    assert "No findings. 1 rejected by the verifier." in text
 
 
 def test_report_counts_do_not_mention_absent_categories() -> None:
@@ -241,3 +258,25 @@ def test_plural_is_shared_by_the_report_and_the_summary() -> None:
     assert plural(1, "turn") == "turn"
     assert plural(2, "turn") == "turns"
     assert summary.plural is plural
+
+
+def test_a_rejected_finding_without_a_verdict_is_still_listed() -> None:
+    text = render_report(result([finding(status="rejected")]))
+
+    assert "1 finding the verifier rejected" in text
+    assert "Verifier" not in text.split("<details>")[1].split("</details>")[0].split("\n- ")[1]
+
+
+def test_an_inconclusive_verification_says_so_on_the_finding() -> None:
+    verdicts = [
+        Verdict(
+            finding_id="security-1",
+            verdict="inconclusive",
+            reasoning="Whether name can be attacker-controlled depends on a caller elsewhere.",
+            confidence=0.3,
+        )
+    ]
+
+    text = render_report(result([finding(status="unverified")], verdicts))
+
+    assert "**Verifier, inconclusive:** Whether name can be attacker-controlled" in text
