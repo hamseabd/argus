@@ -403,3 +403,12 @@ def test_a_single_trial_adds_no_per_trial_line() -> None:
     table = render_markdown({"verify": [score_case(bug_case(SQLI), result(finding("a")))]})
 
     assert "per trial" not in table
+
+
+def test_a_case_that_errored_on_some_trials_sums_the_rest_and_counts_the_errors() -> None:
+    ok = score_case(bug_case(SQLI), result(finding("a")))
+    broken = failed_case(bug_case(SQLI), "boom", 0.1).model_copy(update={"trial": 2})
+
+    table = render_markdown({"verify": [ok, broken]})
+
+    assert "| sqli | 1 / 0 / 1 (1 errored) |" in table
