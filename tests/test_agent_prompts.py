@@ -107,6 +107,7 @@ def test_specialist_prompts_share_the_finding_contract() -> None:
             assert f"`{field}`" in text
         assert f"`category` is `{name}`" in text
         assert "one line per finding" in text  # the lead triages from these lines
+        assert "`replacement`" in text and "one-click" in text
 
 
 def test_verifier_prompt_tries_to_refute() -> None:

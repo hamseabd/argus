@@ -207,11 +207,7 @@ def _category(word: str) -> Category | None:
 
 
 def _comment(finding: Finding, lines: frozenset[int], verdict: Verdict | None) -> dict[str, Any]:
-    comment: dict[str, Any] = {
-        "path": finding.file,
-        "side": "RIGHT",
-        "body": finding_body(finding, verdict),
-    }
+    comment: dict[str, Any] = {"path": finding.file, "side": "RIGHT"}
     end = finding.end_line
     if (
         end is not None
@@ -221,7 +217,22 @@ def _comment(finding: Finding, lines: frozenset[int], verdict: Verdict | None) -
         comment |= {"start_line": finding.line, "start_side": "RIGHT", "line": end}
     else:
         comment["line"] = finding.line
+    body = finding_body(finding, verdict)
+    # A suggestion replaces exactly the lines the comment spans, so it is offered
+    # only when the comment covers the finding's whole range.
+    covered = (comment.get("start_line", comment["line"]), comment["line"])
+    if finding.replacement is not None and covered == (finding.line, end or finding.line):
+        body += "\n\n" + _suggestion(finding.replacement)
+    comment["body"] = body
     return comment
+
+
+def _suggestion(replacement: str) -> str:
+    """A GitHub suggestion block, fenced longer than any backtick run in the replacement."""
+    longest = max((len(run) for run in re.findall(r"`+", replacement)), default=0)
+    fence = "`" * max(3, longest + 1)
+    text = replacement.rstrip("\n")
+    return f"{fence}suggestion\n{text}\n{fence}" if text else f"{fence}suggestion\n{fence}"
 
 
 def _body(

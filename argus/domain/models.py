@@ -51,6 +51,13 @@ class Finding(_Model):
     description: str = Field(description="What is wrong and why it matters.")
     evidence: str = Field(description="The code path or reasoning that supports the claim.")
     suggested_fix: str | None = None
+    replacement: str | None = Field(
+        default=None,
+        description=(
+            "The exact new text of lines line..end_line, offered as a one-click suggestion. "
+            "Only for a fix confined to those lines; empty deletes them."
+        ),
+    )
     confidence: float = Field(ge=0.0, le=1.0)
     status: Status = "pending"
     reported_by: str | None = Field(
