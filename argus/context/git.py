@@ -47,13 +47,19 @@ def increment_since(
 ) -> Increment | None:
     """What changed from `since` to `head`, or None when that is not a clean step forward.
 
-    `since` must be an ancestor of `head`: after a force-push, or when the
-    reviewed commit is not in this clone, there is no meaningful increment
-    and the caller reviews the whole pull request instead.
+    `since` must be an ancestor of `head`, reached without a merge: after a
+    force-push, a merge of the base branch, or when the reviewed commit is not
+    in this clone, there is no clean increment and the caller reviews the
+    whole pull request instead.
     """
     try:
         run_git(repo, "merge-base", "--is-ancestor", "--end-of-options", since, head)
+        merges = run_git(repo, "rev-list", "--merges", f"{since}..{head}")
     except GitError:
+        return None
+    if merges:
+        # A merge (of the base, usually) brings in code the pull request did not
+        # write, and since..head would put all of it under review.
         return None
     files, _ = split_ignored(parse_diff(_diff(repo, since, head)), ignore)
     diff_text, truncated = cap_diff(files, max_bytes)
