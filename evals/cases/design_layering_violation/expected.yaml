@@ -1,0 +1,2 @@
+# the pure domain package now imports and calls the storage layer.
+- {file: app/domain/pricing.py, line_start: 3, line_end: 17, category: design, severity: medium}

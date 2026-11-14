@@ -1,0 +1,23 @@
+# The eval gate on pull requests, read by evals/gate.py.
+#
+# smoke: the subset a pull request runs, about nine reviews: one seeded bug per
+# specialist, two clean controls, and one verifier trap.
+smoke:
+  - none_deref
+  - sqli
+  - tests_tautological_assert
+  - maintainability_duplicated_logic
+  - design_n_plus_one
+  - conventions_print_not_logger
+  - clean_docs_only
+  - clean_tested_feature
+  - trap_subprocess_list_args
+
+# Seeded bugs a run may miss beyond the ones the baseline missed on the same
+# cases. One review per case is one sample and a model's findings vary between
+# runs, so one extra miss is read as noise and two as a regression.
+max_extra_misses: 1
+
+# Findings a clean control may gain over its baseline count before the gate
+# fails: none.
+max_clean_control_gain: 0

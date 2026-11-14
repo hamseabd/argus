@@ -1,0 +1,2 @@
+# The containment check is gone: name = "../../etc/passwd" reads outside UPLOAD_ROOT.
+- {file: app/attachments.py, line_start: 10, line_end: 11, category: security, severity: high}

@@ -1,0 +1,2 @@
+# CLAUDE.md requires AppError subclasses; the new check raises a bare Exception.
+- {file: app/coupons.py, line_start: 12, line_end: 12, category: conventions, severity: low}

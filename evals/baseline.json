@@ -1,0 +1,352 @@
+{
+  "label": "2026-11-02-0ce8e7a",
+  "commit": "0ce8e7a",
+  "config": {
+    "argus_version": "0.1.0",
+    "prompts_sha": "ab0548ebe606",
+    "lead_model": "claude-opus-5-5",
+    "lead_effort": "high",
+    "lead_max_turns": 40,
+    "lead_read_budget": 10,
+    "lead_max_budget_usd": 20.0,
+    "lead_max_answer_holds": 3,
+    "specialist_model": "claude-opus-5-5",
+    "specialist_effort": "high",
+    "specialist_max_turns": 25,
+    "verifier_model": "claude-opus-5-5",
+    "verifier_effort": "high",
+    "verifier_max_turns": 10,
+    "verifier_max_budget_usd": 2.0,
+    "verify_concurrency": 6,
+    "verify_min_severity": "nit",
+    "diff_size_cap": 204800,
+    "fingerprint": "db5aa73fbc95"
+  },
+  "summary": {
+    "cases": 32,
+    "errors": 0,
+    "true_positives": 21,
+    "false_positives": 21,
+    "false_negatives": 1,
+    "precision": 0.5,
+    "recall": 0.9545454545454546,
+    "clean_controls": 6,
+    "clean_controls_flagged": 1,
+    "clean_control_fp_rate": 0.16666666666666666,
+    "true_bugs_confirmed": 22,
+    "true_bugs_rejected": 0,
+    "false_positives_confirmed": 21,
+    "false_positives_rejected": 0,
+    "verifier_inconclusive": 0,
+    "verifier_accuracy": 0.5116279069767442,
+    "verifier_cells": {
+      "confirmed_true": {
+        "count": 22,
+        "mean_confidence": 0.9304545454545454
+      },
+      "rejected_true": {
+        "count": 0,
+        "mean_confidence": null
+      },
+      "confirmed_false": {
+        "count": 21,
+        "mean_confidence": 0.8014285714285714
+      },
+      "rejected_false": {
+        "count": 0,
+        "mean_confidence": null
+      }
+    },
+    "caught_by_category": {
+      "conventions": 2,
+      "correctness": 8,
+      "design": 2,
+      "maintainability": 3,
+      "security": 3,
+      "tests": 3
+    },
+    "seeded_by_category": {
+      "conventions": 2,
+      "correctness": 8,
+      "design": 3,
+      "maintainability": 3,
+      "security": 3,
+      "tests": 3
+    },
+    "recall_by_category": {
+      "conventions": 1.0,
+      "correctness": 1.0,
+      "design": 0.6666666666666666,
+      "maintainability": 1.0,
+      "security": 1.0,
+      "tests": 1.0
+    },
+    "specialists": {
+      "correctness": {
+        "caught": 8,
+        "seeded": 8,
+        "recall": 1.0,
+        "true_findings": 19,
+        "false_findings": 2,
+        "precision": 0.9047619047619048
+      },
+      "security": {
+        "caught": 3,
+        "seeded": 3,
+        "recall": 1.0,
+        "true_findings": 8,
+        "false_findings": 2,
+        "precision": 0.8
+      },
+      "tests": {
+        "caught": 3,
+        "seeded": 3,
+        "recall": 1.0,
+        "true_findings": 4,
+        "false_findings": 5,
+        "precision": 0.4444444444444444
+      },
+      "maintainability": {
+        "caught": 3,
+        "seeded": 3,
+        "recall": 1.0,
+        "true_findings": 18,
+        "false_findings": 10,
+        "precision": 0.6428571428571429
+      },
+      "design": {
+        "caught": 3,
+        "seeded": 3,
+        "recall": 1.0,
+        "true_findings": 23,
+        "false_findings": 8,
+        "precision": 0.7419354838709677
+      },
+      "conventions": {
+        "caught": 2,
+        "seeded": 2,
+        "recall": 1.0,
+        "true_findings": 3,
+        "false_findings": 0,
+        "precision": 1.0
+      },
+      "lead": {
+        "caught": 0,
+        "seeded": 0,
+        "recall": null,
+        "true_findings": 3,
+        "false_findings": 0,
+        "precision": 1.0
+      }
+    },
+    "lead": {
+      "lost": 0,
+      "duplicates": 1,
+      "kept_false": 15,
+      "removed_false": 12,
+      "nit_cap_breaches": 0,
+      "max_findings_breaches": 0
+    },
+    "traps": 4,
+    "traps_triggered": 1,
+    "traps_posted": 1,
+    "total_cost_usd": 14.563468,
+    "mean_cost_usd": 0.455108375,
+    "mean_turns": 14.09375,
+    "mean_duration_ms": 54861.75,
+    "by_category": {
+      "correctness": {
+        "true_positives": 8,
+        "false_positives": 2,
+        "precision": 0.8
+      },
+      "security": {
+        "true_positives": 3,
+        "false_positives": 2,
+        "precision": 0.6
+      },
+      "tests": {
+        "true_positives": 3,
+        "false_positives": 5,
+        "precision": 0.375
+      },
+      "maintainability": {
+        "true_positives": 3,
+        "false_positives": 5,
+        "precision": 0.375
+      },
+      "design": {
+        "true_positives": 2,
+        "false_positives": 6,
+        "precision": 0.25
+      },
+      "conventions": {
+        "true_positives": 2,
+        "false_positives": 1,
+        "precision": 0.6666666666666666
+      }
+    }
+  },
+  "cases": {
+    "argus_dev_pr55_c4255102517": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 8
+    },
+    "clean_added_log_context": {
+      "true_positives": 0,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "clean_correct_fix": {
+      "true_positives": 0,
+      "false_negatives": 0,
+      "reported": 0
+    },
+    "clean_docs_only": {
+      "true_positives": 0,
+      "false_negatives": 0,
+      "reported": 0
+    },
+    "clean_named_constant": {
+      "true_positives": 0,
+      "false_negatives": 0,
+      "reported": 0
+    },
+    "clean_rename_refactor": {
+      "true_positives": 0,
+      "false_negatives": 0,
+      "reported": 0
+    },
+    "clean_tested_feature": {
+      "true_positives": 0,
+      "false_negatives": 0,
+      "reported": 0
+    },
+    "conventions_bare_exception": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "conventions_print_not_logger": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 2
+    },
+    "cross_file_contract": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "design_layering_violation": {
+      "true_positives": 0,
+      "false_negatives": 1,
+      "reported": 1
+    },
+    "design_n_plus_one": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "design_unbounded_growth": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 2
+    },
+    "js_async_foreach": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "leaked_file_handle": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "maintainability_docstring_drift": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 3
+    },
+    "maintainability_duplicated_logic": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "maintainability_misleading_comment": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "missing_await": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "none_deref": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "off_by_one": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "path_traversal": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "removed_auth_check": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "sqli": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 2
+    },
+    "tests_missing_negative_case": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    },
+    "tests_mocked_unit": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 2
+    },
+    "tests_tautological_assert": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 2
+    },
+    "trap_except_reraise": {
+      "true_positives": 0,
+      "false_negatives": 0,
+      "reported": 0
+    },
+    "trap_inclusive_range": {
+      "true_positives": 0,
+      "false_negatives": 0,
+      "reported": 0
+    },
+    "trap_subprocess_list_args": {
+      "true_positives": 0,
+      "false_negatives": 0,
+      "reported": 3
+    },
+    "trap_validated_path": {
+      "true_positives": 0,
+      "false_negatives": 0,
+      "reported": 3
+    },
+    "truncated_diff_bug": {
+      "true_positives": 1,
+      "false_negatives": 0,
+      "reported": 1
+    }
+  }
+}

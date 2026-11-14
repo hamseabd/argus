@@ -1,0 +1,151 @@
+"""ClaudeAgentOptions for the lead reviewer and the verifier.
+
+Everything that shapes a query is decided here from Settings and the
+review context: models, efforts, caps, the read-only tool set, the
+specialist subagents, the structured-output schema, the hooks, and the
+session isolation that keeps the repository under review from injecting
+its own settings, hooks, or CLAUDE.md into the reviewer.
+"""
+
+from typing import Any
+
+from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions
+
+from argus.agent.hooks import ALLOWED_TOOLS, DENIED_TOOLS, HookState, build_hooks
+from argus.agent.prompts import SPECIALISTS, load_prompt, rules_section, specialist_prompt
+from argus.agent.schemas import output_format, triage_schema, verdict_schema
+from argus.agent.tools import (
+    GIT_HISTORY_TOOL_NAME,
+    REPORT_FINDING_TOOL_NAME,
+    SERVER_NAME,
+    build_argus_server,
+)
+from argus.domain.models import RepoRules, ReviewContext
+from argus.settings import Settings
+from argus.telemetry import get_logger
+
+_SPECIALIST_FOCUS = {
+    "correctness": "logic errors, edge cases, error paths, retries, time, concurrency, leaks",
+    "security": "threat model, injection, secrets, authorization, dependencies, sensitive paths",
+    "tests": "whether a test would fail if the change were reverted; weak or fake assertions",
+    "maintainability": "readability, duplication, dead code, comments and docs that drift",
+    "design": "layering, API contracts, scalability, resilience, observability, configuration",
+    "conventions": "the repository's written rules and the standard ones, each rule quoted",
+}
+_READ_TOOLS = ["Read", "Grep", "Glob"]
+
+
+def specialist_agents(
+    settings: Settings, rules: RepoRules | None = None
+) -> dict[str, AgentDefinition]:
+    return {
+        name: AgentDefinition(
+            description=f"{name} specialist: {_SPECIALIST_FOCUS[name]}. Read-only.",
+            prompt=_with_rules(specialist_prompt(name), rules),
+            tools=[*_READ_TOOLS, GIT_HISTORY_TOOL_NAME, REPORT_FINDING_TOOL_NAME],
+            model=settings.specialist_model,
+            effort=settings.specialist_effort,
+            maxTurns=settings.specialist_max_turns,
+            # Declares the intent only. The bundled CLI (2.1.259) reads this field
+            # solely as `background === true`; it backgrounds every Agent call by
+            # default. CLAUDE_CODE_DISABLE_BACKGROUND_TASKS in _common is what
+            # actually keeps the specialists in the foreground.
+            background=False,
+        )
+        for name in SPECIALISTS
+    }
+
+
+def lead_options(
+    settings: Settings, context: ReviewContext, state: HookState
+) -> ClaudeAgentOptions:
+    return ClaudeAgentOptions(
+        model=settings.lead_model,
+        effort=settings.lead_effort,
+        max_turns=settings.lead_max_turns,
+        max_budget_usd=settings.lead_max_budget_usd,
+        system_prompt=load_prompt("lead"),
+        tools=[*_READ_TOOLS, "Agent"],
+        allowed_tools=list(ALLOWED_TOOLS),
+        agents=specialist_agents(settings, context.review_rules),
+        output_format=output_format(triage_schema()),
+        **_common(context, state),
+    )
+
+
+def verifier_options(
+    settings: Settings, context: ReviewContext, state: HookState
+) -> ClaudeAgentOptions:
+    return ClaudeAgentOptions(
+        model=settings.verifier_model,
+        effort=settings.verifier_effort,
+        max_turns=settings.verifier_max_turns,
+        max_budget_usd=settings.verifier_max_budget_usd,
+        system_prompt=_with_rules(load_prompt("verifier"), context.review_rules),
+        tools=list(_READ_TOOLS),
+        allowed_tools=[*_READ_TOOLS, GIT_HISTORY_TOOL_NAME],
+        output_format=output_format(verdict_schema()),
+        **_common(context, state),
+    )
+
+
+UNNEEDED_CREDENTIALS: tuple[str, ...] = (
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "LANGSMITH_API_KEY",
+    "ARGUS_APP_PRIVATE_KEY",
+)
+"""Credentials the review step may hold that the CLI never uses; blanked in its environment."""
+
+
+def _common(context: ReviewContext, state: HookState) -> dict[str, Any]:
+    return {
+        "cwd": context.repo_root,
+        "permission_mode": "dontAsk",
+        "disallowed_tools": sorted(DENIED_TOOLS),
+        "hooks": build_hooks(state, context.repo_root),
+        # The review stage's state carries a collector, so its server also serves
+        # report_finding; the verifier's does not, so it can only read.
+        "mcp_servers": {SERVER_NAME: build_argus_server(context.repo_root, state.collector)},
+        "strict_mcp_config": True,
+        "setting_sources": [],
+        "stderr": _cli_stderr,
+        # Argus builds its own spans (argus.tracing); the native ones carry the
+        # account's identity and would duplicate the tree. The exporter settings
+        # are blanked too: the headers carry the LangSmith key, and the child
+        # process has no use for it.
+        #
+        # The bundled CLI runs an Agent call in the background unless background
+        # tasks are disabled: `background: false` on the definition is never read,
+        # and in its default fork mode the model is not even offered
+        # run_in_background. A backgrounded specialist returns at once and reports
+        # after the lead has answered, which is how reviews failed from Sep 24.
+        # With background tasks off, the lead's Agent calls return with the
+        # findings; calls made in one message still run concurrently. Argus has
+        # no other background work (Bash and Monitor are not in its tool set).
+        #
+        # The CLI inherits the parent's environment. It runs on the Claude token
+        # and needs nothing else, so every other credential the review step holds
+        # is blanked: what the process does not have, no read can leak.
+        "env": {
+            **{name: "" for name in UNNEEDED_CREDENTIALS},
+            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
+            "OTEL_EXPORTER_OTLP_HEADERS": "",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "",
+        },
+    }
+
+
+def _with_rules(prompt: str, rules: RepoRules | None) -> str:
+    """A system prompt with the repository's review rules after it, when it has any.
+
+    The lead reads them in its user prompt; the specialists and the verifier
+    never see that, so the rules go into theirs.
+    """
+    section = rules_section(rules)
+    return f"{prompt.rstrip()}\n\n{section}" if section else prompt
+
+
+def _cli_stderr(line: str) -> None:
+    get_logger().debug("cli_stderr", line=line.rstrip())

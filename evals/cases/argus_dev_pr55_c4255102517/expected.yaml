@@ -1,0 +1,10 @@
+# Proposed from https://github.com/hamseabd/argus-dev/pull/55#discussion_r4255102517
+# Finding: `known` may never clear, permanently disabling incremental re-review
+# Reactions: +1 1, -1 0. Check the lines and the kind before committing.
+kind: bug
+bugs:
+- file: argus/cli.py
+  line_start: 205
+  line_end: 206
+  category: correctness
+  severity: high

@@ -1,0 +1,4 @@
+# A user-supplied name is joined onto base_dir and opened, but the resolved path is checked first.
+kind: verifier-trap
+traps:
+  - {file: app/attachments.py, line_start: 19, line_end: 20, category: security}

@@ -1,0 +1,523 @@
+import asyncio
+import io
+import json
+from pathlib import Path
+
+import pytest
+from opentelemetry import trace as otel_trace
+from opentelemetry.trace import StatusCode
+
+from argus import telemetry
+from argus.domain.errors import AgentRunError, ReviewProtocolError
+from argus.domain.models import (
+    Finding,
+    KnownFinding,
+    Review,
+    ReviewContext,
+    RunConfig,
+    StageMetrics,
+    Verdict,
+)
+from argus.pipeline import StageOutcome, run_review
+
+
+def metrics(stage: str, cost: float = 0.1) -> StageMetrics:
+    return StageMetrics(
+        stage=stage,
+        model="m",
+        cost_usd=cost,
+        input_tokens=1,
+        output_tokens=1,
+        num_turns=1,
+        duration_ms=1,
+        subagents_run=3 if stage == "review" else 0,
+    )
+
+
+def finding(i: int, **overrides) -> Finding:
+    base = dict(
+        id=f"correctness-{i}",
+        file=f"f{i}.py",
+        line=i,
+        severity="high",
+        category="correctness",
+        title=f"t{i}",
+        description="d",
+        evidence="e",
+        confidence=0.5,
+    )
+    return Finding(**{**base, **overrides})
+
+
+class FakeAgent:
+    def __init__(self, review: Review, verdicts: dict[str, str | Exception]) -> None:
+        self._review = review
+        self._verdicts = verdicts
+        self.verify_calls: list[tuple[str, str]] = []
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def review(self, context: ReviewContext) -> StageOutcome[Review]:
+        return StageOutcome(self._review, metrics("review", 1.0), "sess")
+
+    async def verify(self, context: ReviewContext, finding: Finding, diff_section: str):
+        self.verify_calls.append((finding.id, diff_section))
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        await asyncio.sleep(0.01)
+        self.in_flight -= 1
+        outcome = self._verdicts[finding.id]
+        if isinstance(outcome, Exception):
+            raise outcome
+        verdict = Verdict(
+            finding_id=finding.id,
+            verdict=outcome,
+            reasoning="r",
+            severity=finding.severity,
+            confidence=0.8,
+        )
+        return StageOutcome(verdict, metrics(f"verify:{finding.id}"), "sess")
+
+
+def context(tmp_path: Path) -> ReviewContext:
+    return ReviewContext(
+        source="local",
+        repo_root=tmp_path,
+        files=[],
+        diff_text="diff --git a/f1.py b/f1.py\n--- a/f1.py\n+++ b/f1.py\n@@ -1 +1 @@\n+x\n",
+    )
+
+
+def test_full_flow_assigns_final_statuses_and_totals(tmp_path: Path) -> None:
+    review = Review(
+        summary="s", files_reviewed=["f1.py"], findings=[finding(1), finding(2), finding(3)]
+    )
+    agent = FakeAgent(
+        review,
+        {
+            "correctness-1": "confirmed",
+            "correctness-2": "rejected",
+            "correctness-3": AgentRunError("error_max_turns", 0.05),
+        },
+    )
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    statuses = {f.id: f.status for f in result.review.findings}
+    assert statuses == {
+        "correctness-1": "confirmed",
+        "correctness-2": "rejected",
+        "correctness-3": "unverified",
+    }
+    assert [v.finding_id for v in result.verdicts] == ["correctness-1", "correctness-2"]
+    assert [m.stage for m in result.metrics] == [
+        "review",
+        "verify:correctness-1",
+        "verify:correctness-2",
+    ]
+    assert result.total_cost_usd == 1.25  # the failed verification's $0.05 counts too
+    assert result.duration_ms > 0
+    assert result.session_id == "sess"
+    assert result.review.summary == "s"
+
+
+def test_a_verdict_sets_the_posted_status_and_the_final_severity(tmp_path: Path) -> None:
+    class Judging(FakeAgent):
+        async def verify(self, context: ReviewContext, finding: Finding, diff_section: str):
+            judged = {"correctness-1": (0.9, "critical"), "correctness-2": (0.4, "high")}
+            confidence, severity = judged[finding.id]
+            verdict = Verdict(
+                finding_id=finding.id,
+                verdict="confirmed",
+                reasoning="r",
+                severity=severity,
+                confidence=confidence,
+            )
+            return StageOutcome(verdict, metrics(f"verify:{finding.id}"), "sess")
+
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1), finding(2)])
+
+    result = asyncio.run(run_review(context(tmp_path), Judging(review, {})))
+
+    final = {f.id: (f.status, f.severity) for f in result.review.findings}
+    assert final == {
+        "correctness-1": ("confirmed", "critical"),
+        "correctness-2": ("rejected", "high"),  # confirmed, but not confidently enough to post
+    }
+
+
+def test_verify_gets_the_finding_file_section_of_the_diff(tmp_path: Path) -> None:
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1), finding(2)])
+    agent = FakeAgent(review, {"correctness-1": "confirmed", "correctness-2": "confirmed"})
+
+    asyncio.run(run_review(context(tmp_path), agent))
+
+    sections = dict(agent.verify_calls)
+    assert sections["correctness-1"].startswith("diff --git a/f1.py")
+    assert sections["correctness-2"] == ""
+
+
+def test_the_review_policy_runs_before_any_finding_is_verified(tmp_path: Path) -> None:
+    duplicate = finding(1, id="correctness-9", severity="medium")
+    nit = finding(4, id="maintainability-1", category="maintainability", severity="nit")
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1), duplicate, nit])
+    agent = FakeAgent(review, {"correctness-1": "confirmed"})
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    assert [fid for fid, _ in agent.verify_calls] == ["correctness-1"]
+    assert [f.id for f in result.review.findings] == ["correctness-1"]
+
+
+def test_what_the_review_policy_dropped_is_logged(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    nit = finding(4, id="maintainability-1", category="maintainability", severity="nit")
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1), nit])
+
+    asyncio.run(run_review(context(tmp_path), FakeAgent(review, {}), verify=False))
+
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    curated = next(e for e in events if e["event"] == "findings_curated")
+    assert (curated["reported"], curated["kept"]) == (2, 1)
+
+
+def test_no_verify_marks_everything_unverified_without_calling_the_verifier(tmp_path: Path) -> None:
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    agent = FakeAgent(review, {})
+
+    result = asyncio.run(run_review(context(tmp_path), agent, verify=False))
+
+    assert agent.verify_calls == []
+    assert result.verdicts == []
+    assert result.review.findings[0].status == "unverified"
+    assert result.total_cost_usd == 1.0
+
+
+def test_verification_is_bounded_by_the_concurrency_limit(tmp_path: Path) -> None:
+    findings = [finding(i) for i in range(1, 9)]
+    review = Review(summary="s", files_reviewed=[], findings=findings)
+    agent = FakeAgent(review, {f.id: "confirmed" for f in findings})
+
+    asyncio.run(run_review(context(tmp_path), agent, verify_concurrency=3))
+
+    assert agent.max_in_flight == 3
+    assert len(agent.verify_calls) == 8
+
+
+def test_empty_review_skips_verification(tmp_path: Path) -> None:
+    agent = FakeAgent(Review(summary="clean", files_reviewed=["f1.py"], findings=[]), {})
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    assert result.review.findings == []
+    assert result.total_cost_usd == 1.0
+
+
+def test_run_events_are_logged_with_a_run_id(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1), finding(2)])
+    agent = FakeAgent(
+        review, {"correctness-1": "confirmed", "correctness-2": AgentRunError("x", 0.0)}
+    )
+
+    asyncio.run(run_review(context(tmp_path), agent))
+
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    names = [e["event"] for e in events]
+    assert names[0] == "run_start"
+    assert names[-1] == "run_end"
+    assert "verify_failed" in names
+    assert len({e["run_id"] for e in events}) == 1
+    end = events[-1]
+    assert end["confirmed"] == 1
+    assert end["unverified"] == 1
+    assert end["rejected"] == 0
+    assert end["total_cost_usd"] == 1.1
+
+
+def test_a_caller_supplied_run_id_is_used(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    agent = FakeAgent(Review(summary="s", files_reviewed=[], findings=[]), {})
+
+    asyncio.run(run_review(context(tmp_path), agent, run_id="given-1"))
+
+    assert {json.loads(line)["run_id"] for line in stream.getvalue().splitlines()} == {"given-1"}
+
+
+def test_a_paid_but_invalid_verdict_still_counts_toward_the_total(tmp_path: Path) -> None:
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    agent = FakeAgent(review, {"correctness-1": ReviewProtocolError("bad verdict", cost_usd=0.2)})
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    assert result.review.findings[0].status == "unverified"
+    assert result.total_cost_usd == 1.2
+
+
+def test_an_integer_cost_on_a_failed_verification_is_handled(tmp_path: Path) -> None:
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    agent = FakeAgent(review, {"correctness-1": AgentRunError("error_max_turns", 0)})
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    assert result.total_cost_usd == 1.0
+
+
+def by_name(finished, name: str) -> list:
+    return [s for s in finished if s.name == name]
+
+
+def test_a_run_is_one_trace_with_a_review_and_a_span_per_verification(
+    tmp_path: Path, spans
+) -> None:
+    review = Review(summary="s", files_reviewed=["f1.py"], findings=[finding(1), finding(2)])
+    agent = FakeAgent(
+        review,
+        {
+            "correctness-1": "confirmed",
+            "correctness-2": ReviewProtocolError("no verdict", cost_usd=0.05),
+        },
+    )
+
+    asyncio.run(run_review(context(tmp_path), agent, run_id="r1"))
+
+    finished = spans.get_finished_spans()
+    (run,) = by_name(finished, "argus.run")
+    (rev,) = by_name(finished, "argus.review")
+    verifies = by_name(finished, "argus.verify")
+    assert {s.context.trace_id for s in finished} == {run.context.trace_id}
+    assert run.parent is None
+    assert rev.parent.span_id == run.context.span_id
+    assert len(verifies) == 2
+    assert all(v.parent.span_id == run.context.span_id for v in verifies)
+
+    assert run.attributes["langsmith.metadata.run_id"] == "r1"
+    assert run.attributes["langsmith.metadata.source"] == "local"
+    assert run.attributes["langsmith.metadata.total_cost_usd"] == 1.15
+    assert run.attributes["langsmith.metadata.confirmed"] == 1
+    assert run.attributes["langsmith.metadata.unverified"] == 1
+    assert rev.attributes["langsmith.metadata.cost_usd"] == 1.0
+
+    ok = next(
+        v for v in verifies if v.attributes["langsmith.metadata.finding_id"] == "correctness-1"
+    )
+    assert ok.attributes["langsmith.trace.name"] == "argus.verify correctness-1"
+    assert ok.attributes["langsmith.metadata.verdict"] == "confirmed"
+    assert ok.attributes["langsmith.metadata.severity"] == "high"
+    assert ok.attributes["langsmith.metadata.title"] == "t1"
+    failed = next(
+        v for v in verifies if v.attributes["langsmith.metadata.finding_id"] == "correctness-2"
+    )
+    assert failed.status.status_code == StatusCode.ERROR
+    assert failed.attributes["langsmith.metadata.cost_usd"] == 0.05
+
+
+def test_each_verification_runs_inside_its_own_span(tmp_path: Path, spans) -> None:
+    seen: dict[str, int] = {}
+
+    class SpanSpy(FakeAgent):
+        async def verify(self, context, finding, diff_section):
+            seen[finding.id] = otel_trace.get_current_span().get_span_context().span_id
+            return await super().verify(context, finding, diff_section)
+
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1), finding(2), finding(3)])
+    agent = SpanSpy(review, {f"correctness-{i}": "confirmed" for i in (1, 2, 3)})
+
+    asyncio.run(run_review(context(tmp_path), agent, verify_concurrency=3))
+
+    verifies = {
+        s.attributes["langsmith.metadata.finding_id"]: s.context.span_id
+        for s in by_name(spans.get_finished_spans(), "argus.verify")
+    }
+    assert seen == verifies
+
+
+def test_a_failed_review_stage_marks_the_run_and_the_stage(tmp_path: Path, spans) -> None:
+    class Broken(FakeAgent):
+        async def review(self, context):
+            raise AgentRunError("error_max_budget_usd", 3.0)
+
+    with pytest.raises(AgentRunError):
+        asyncio.run(
+            run_review(
+                context(tmp_path), Broken(Review(summary="s", files_reviewed=[], findings=[]), {})
+            )
+        )
+
+    finished = spans.get_finished_spans()
+    (run,) = by_name(finished, "argus.run")
+    (rev,) = by_name(finished, "argus.review")
+    assert rev.status.status_code == StatusCode.ERROR
+    assert rev.attributes["langsmith.metadata.cost_usd"] == 3.0
+    assert run.status.status_code == StatusCode.ERROR
+
+
+def test_findings_already_reported_are_marked_known_and_not_verified(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1), finding(2)])
+    agent = FakeAgent(review, {"correctness-1": "confirmed", "correctness-2": "confirmed"})
+    known = [KnownFinding(file="f2.py", line=2, title="t2", url="https://x/r#discussion_1")]
+
+    result = asyncio.run(run_review(context(tmp_path), agent, known=known))
+
+    statuses = {f.id: f.status for f in result.review.findings}
+    assert statuses == {"correctness-1": "confirmed", "correctness-2": "known"}
+    assert [fid for fid, _ in agent.verify_calls] == ["correctness-1"]
+    assert result.total_cost_usd == 1.1
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    skipped = next(e for e in events if e["event"] == "known_findings_skipped")
+    assert skipped["findings"] == {"correctness-2": "https://x/r#discussion_1"}
+    assert events[-1]["known"] == 1
+
+
+def test_known_findings_stay_known_without_verification_too(tmp_path: Path) -> None:
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    known = [KnownFinding(file="f1.py", line=1, title="t1", url="u")]
+
+    result = asyncio.run(
+        run_review(context(tmp_path), FakeAgent(review, {}), verify=False, known=known)
+    )
+
+    assert result.review.findings[0].status == "known"
+
+
+def run_config() -> RunConfig:
+    return RunConfig(
+        argus_version="0.1.0",
+        prompts_sha="0123456789ab",
+        lead_model="claude-opus-5",
+        lead_effort="high",
+        lead_max_turns=40,
+        lead_read_budget=10,
+        lead_max_budget_usd=3.0,
+        lead_max_answer_holds=3,
+        specialist_model="claude-sonnet-5",
+        specialist_effort="medium",
+        specialist_max_turns=25,
+        verifier_model="claude-sonnet-5",
+        verifier_effort="medium",
+        verifier_max_turns=10,
+        verifier_max_budget_usd=0.5,
+        verify_concurrency=4,
+        diff_size_cap=204800,
+    )
+
+
+def test_the_run_config_travels_with_the_result_the_log_and_the_trace(
+    tmp_path: Path, spans
+) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    agent = FakeAgent(review, {"correctness-1": "confirmed"})
+    config = run_config()
+
+    result = asyncio.run(run_review(context(tmp_path), agent, config=config))
+
+    assert result.config == config
+    events = [json.loads(line) for line in stream.getvalue().splitlines()]
+    start = next(e for e in events if e["event"] == "run_start")
+    assert start["config"] == config.fingerprint
+    assert start["prompts"] == config.prompts_sha
+    (run,) = by_name(spans.get_finished_spans(), "argus.run")
+    assert run.attributes["langsmith.metadata.config"] == config.fingerprint
+    assert run.attributes["langsmith.metadata.prompts_sha"] == config.prompts_sha
+    assert run.attributes["langsmith.metadata.lead_model"] == "claude-opus-5"
+
+
+def test_without_a_config_the_result_log_and_trace_carry_none(tmp_path: Path, spans) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    review = Review(summary="s", files_reviewed=[], findings=[])
+
+    result = asyncio.run(run_review(context(tmp_path), FakeAgent(review, {})))
+
+    assert result.config is None
+    start = next(
+        json.loads(line)
+        for line in stream.getvalue().splitlines()
+        if json.loads(line)["event"] == "run_start"
+    )
+    assert "config" not in start
+    (run,) = by_name(spans.get_finished_spans(), "argus.run")
+    assert "langsmith.metadata.config" not in run.attributes
+
+
+def test_nothing_token_shaped_survives_into_the_result(tmp_path: Path) -> None:
+    # A reviewer tricked into reading a credential would quote it as evidence,
+    # and the result is posted, summarised, printed, and kept as an artifact.
+    token = "sk-ant-oat01-" + "a" * 40
+    leaky = finding(
+        1,
+        title=f"Token {token}",
+        evidence=f"environ holds CLAUDE_CODE_OAUTH_TOKEN={token}",
+        suggested_fix="rotate ghs_" + "b" * 36,
+    )
+    review = Review(summary=f"Found {token} in the env.", files_reviewed=[], findings=[leaky])
+    agent = FakeAgent(review, {"correctness-1": "confirmed"})
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    dumped = result.model_dump_json()
+    assert "sk-ant-oat01-aaaa" not in dumped
+    assert "ghs_bbbb" not in dumped
+    assert result.review.findings[0].evidence.endswith("[redacted]")
+    assert result.review.findings[0].status == "confirmed"
+
+
+def test_an_inconclusive_verdict_leaves_the_finding_unverified_and_keeps_the_verdict(
+    tmp_path: Path,
+) -> None:
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    agent = FakeAgent(review, {"correctness-1": "inconclusive"})
+
+    result = asyncio.run(run_review(context(tmp_path), agent))
+
+    assert result.review.findings[0].status == "unverified"
+    assert [v.verdict for v in result.verdicts] == ["inconclusive"]
+
+
+def test_findings_below_the_verify_floor_are_reported_unverified_without_a_query(
+    tmp_path: Path,
+) -> None:
+    review = Review(
+        summary="s",
+        files_reviewed=[],
+        findings=[finding(1, severity="high"), finding(2, severity="low")],
+    )
+    agent = FakeAgent(review, {"correctness-1": "confirmed"})
+
+    result = asyncio.run(run_review(context(tmp_path), agent, verify_min_severity="medium"))
+
+    assert [c[0] for c in agent.verify_calls] == ["correctness-1"]
+    assert {f.id: f.status for f in result.review.findings} == {
+        "correctness-1": "confirmed",
+        "correctness-2": "unverified",
+    }
+
+
+def test_a_failed_verification_logs_its_error_without_a_token(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    telemetry.configure(log_format="json", stream=stream)
+    review = Review(summary="s", files_reviewed=[], findings=[finding(1)])
+    leaked = ReviewProtocolError("bad verdict: reasoning sk-ant-oat01-" + "a" * 40, 0.1)
+    agent = FakeAgent(review, {"correctness-1": leaked})
+
+    asyncio.run(run_review(context(tmp_path), agent))
+
+    assert "sk-ant-oat01-aaaa" not in stream.getvalue()
+    assert "[redacted]" in stream.getvalue()
+
+
+def test_by_default_every_severity_is_verified_nits_included(tmp_path: Path) -> None:
+    nit = finding(1, id="maintainability-1", category="maintainability", severity="nit")
+    review = Review(summary="s", files_reviewed=[], findings=[nit])
+    agent = FakeAgent(review, {"maintainability-1": "confirmed"})
+
+    asyncio.run(run_review(context(tmp_path), agent))
+
+    assert [fid for fid, _ in agent.verify_calls] == ["maintainability-1"]

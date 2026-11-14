@@ -1,0 +1,474 @@
+"""The eval runner's orchestration, driven offline by a fake agent. The live run is opt-in."""
+
+import asyncio
+import json
+from datetime import date
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+import argus.agent.review
+import evals.run
+from argus.domain.errors import AgentRunError, GitError
+from argus.domain.models import Finding, Review, ReviewContext, StageMetrics, Verdict
+from argus.pipeline import StageOutcome
+from argus.settings import Settings
+from evals.corpus import Case, load_cases
+from evals.gate import REPORT_PATH, load_thresholds
+from evals.run import ResultPaths, result_label, run_eval
+from tests.helpers import git
+
+CASES = {case.name: case for case in load_cases()}
+BUGS = {bug.file: bug for case in CASES.values() for bug in case.expected}
+
+
+def metrics(stage: str, cost: float = 0.5) -> StageMetrics:
+    return StageMetrics(
+        stage=stage,
+        model="m",
+        cost_usd=cost,
+        input_tokens=0,
+        output_tokens=0,
+        num_turns=3,
+        duration_ms=10,
+    )
+
+
+class OracleAgent:
+    """Reports exactly the seeded bug in whichever changed file carries one, and confirms it."""
+
+    def __init__(self) -> None:
+        self.roots: list[Path] = []
+        self.verified: list[str] = []
+        self.truncated: list[list[str]] = []
+
+    async def review(self, context: ReviewContext) -> StageOutcome[Review]:
+        self.roots.append(context.repo_root)
+        self.truncated.append(list(context.truncated_files))
+        findings = [
+            {
+                "file": bug.file,
+                "line": bug.line_start,
+                "severity": bug.severity,
+                "category": bug.category,
+                "title": "seeded",
+                "description": "d",
+                "evidence": "e",
+                "confidence": 0.9,
+            }
+            for f in context.files
+            if (bug := BUGS.get(f.path))
+        ]
+        review = Review(summary="s", findings=findings, files_reviewed=[])
+        return StageOutcome(review, metrics("review"), "sess")
+
+    async def verify(self, context: ReviewContext, finding: Finding, diff_section: str):
+        self.verified.append(finding.id)
+        verdict = Verdict(
+            finding_id=finding.id,
+            verdict="confirmed",
+            reasoning="r",
+            severity=finding.severity,
+            confidence=1,
+        )
+        return StageOutcome(verdict, metrics(f"verify:{finding.id}", 0.25), "sess")
+
+
+class BrokenAgent(OracleAgent):
+    async def review(self, context: ReviewContext) -> StageOutcome[Review]:
+        raise AgentRunError("error_max_budget_usd", 3.0)
+
+
+def run(agent, names, modes, out: Path):
+    cases = [CASES[n] for n in names]
+    return asyncio.run(run_eval(cases, agent, modes=modes, out_dir=out, label="2026-09-26-abc1234"))
+
+
+def test_the_label_is_the_date_and_the_short_sha() -> None:
+    assert result_label(date(2026, 9, 26), "abc1234") == "2026-09-26-abc1234"
+
+
+def test_a_run_writes_the_json_record_and_the_markdown_table(tmp_path: Path) -> None:
+    paths = run(OracleAgent(), ["sqli", "clean_docs_only"], ["verify", "no-verify"], tmp_path)
+
+    assert paths.json == tmp_path / "2026-09-26-abc1234.json"
+    assert paths.markdown == tmp_path / "2026-09-26-abc1234.md"
+    record = json.loads(paths.json.read_text())
+    assert list(record["modes"]) == ["verify", "no-verify"]
+    for mode in ("verify", "no-verify"):
+        summary = record["modes"][mode]["summary"]
+        assert (summary["precision"], summary["recall"], summary["clean_control_fp_rate"]) == (
+            1.0,
+            1.0,
+            0.0,
+        )
+        cases = record["modes"][mode]["cases"]
+        assert [c["score"]["case"] for c in cases] == ["sqli", "clean_docs_only"]
+        assert cases[0]["result"]["review"]["findings"][0]["file"] == "app/customers.py"
+    assert record["modes"]["verify"]["summary"]["verifier_accuracy"] == 1.0
+    assert record["modes"]["verify"]["summary"]["total_cost_usd"] == 1.25  # 2 reviews, 1 verify
+    assert paths.markdown.read_text().startswith("| Mode |")
+
+
+def test_no_verify_mode_never_calls_the_verifier(tmp_path: Path) -> None:
+    agent = OracleAgent()
+
+    run(agent, ["sqli"], ["no-verify"], tmp_path)
+
+    assert agent.verified == []
+
+
+def test_the_reviewer_cannot_see_the_case_name(tmp_path: Path) -> None:
+    agent = OracleAgent()
+
+    run(agent, ["path_traversal"], ["verify"], tmp_path)
+
+    (root,) = agent.roots
+    assert "path_traversal" not in str(root)
+    assert "traversal" not in str(root)
+
+
+def test_a_failed_review_is_scored_as_missed_with_its_cost_and_the_run_goes_on(
+    tmp_path: Path,
+) -> None:
+    paths = run(BrokenAgent(), ["sqli", "off_by_one"], ["verify"], tmp_path)
+
+    record = json.loads(paths.json.read_text())
+    summary = record["modes"]["verify"]["summary"]
+    assert (summary["cases"], summary["errors"], summary["false_negatives"]) == (2, 2, 2)
+    assert summary["total_cost_usd"] == 6.0
+    case = record["modes"]["verify"]["cases"][0]
+    assert case["result"] is None
+    assert "error_max_budget_usd" in case["score"]["error"]
+
+
+class UnpaidFailureAgent(OracleAgent):
+    async def review(self, context: ReviewContext) -> StageOutcome[Review]:
+        raise GitError("git diff failed")
+
+
+def test_a_failure_that_spent_nothing_is_scored_at_zero_cost(tmp_path: Path) -> None:
+    paths = run(UnpaidFailureAgent(), ["sqli"], ["verify"], tmp_path)
+
+    record = json.loads(paths.json.read_text())
+    (case,) = record["modes"]["verify"]["cases"]
+    assert case["score"]["cost_usd"] == 0.0
+    assert case["score"]["error"] == "git diff failed"
+    assert record["modes"]["verify"]["summary"]["total_cost_usd"] == 0.0
+
+
+def test_a_case_whose_repository_cannot_be_built_is_scored_as_failed_and_the_run_goes_on(
+    tmp_path: Path,
+) -> None:
+    missing = Case(name="missing", path=tmp_path / "no-such-case", expected=CASES["sqli"].expected)
+    cases = [missing, CASES["off_by_one"]]
+
+    paths = asyncio.run(
+        run_eval(cases, OracleAgent(), modes=["verify"], out_dir=tmp_path / "out", label="x")
+    )
+
+    record = json.loads(paths.json.read_text())
+    broken, off_by_one = record["modes"]["verify"]["cases"]
+    assert broken["result"] is None
+    assert "no-such-case" in broken["score"]["error"]
+    assert (broken["score"]["false_negatives"], broken["score"]["cost_usd"]) == (1, 0.0)
+    assert off_by_one["score"]["error"] is None
+    assert off_by_one["score"]["true_positives"] == 1
+
+
+def test_a_repeated_mode_runs_the_corpus_once_and_is_summarised_once(tmp_path: Path) -> None:
+    agent = OracleAgent()
+
+    paths = run(agent, ["sqli"], ["verify", "verify"], tmp_path)
+
+    assert len(agent.roots) == 1
+    record = json.loads(paths.json.read_text())
+    assert list(record["modes"]) == ["verify"]
+    summary = record["modes"]["verify"]["summary"]
+    assert (summary["cases"], summary["true_positives"], summary["total_cost_usd"]) == (1, 1, 0.75)
+    assert len(record["modes"]["verify"]["cases"]) == 1
+
+
+@pytest.fixture
+def argus_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A throwaway repository standing in for the Argus checkout under evaluation."""
+    repo = tmp_path / "argus"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.email", "fixture@argus.test")
+    git(repo, "config", "user.name", "Fixture")
+    (repo / "tracked.txt").write_text("one\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "init")
+    monkeypatch.setattr(evals.run, "ROOT", repo)
+    return repo
+
+
+def test_the_label_sha_is_head_of_the_checkout(argus_checkout: Path) -> None:
+    assert evals.run._short_sha() == git(argus_checkout, "rev-parse", "--short", "HEAD")
+
+
+def test_an_uncommitted_change_marks_the_sha_dirty(argus_checkout: Path) -> None:
+    (argus_checkout / "tracked.txt").write_text("two\n")
+
+    assert evals.run._short_sha().endswith("-dirty")
+
+
+def test_an_untracked_file_alone_does_not_mark_the_sha_dirty(argus_checkout: Path) -> None:
+    (argus_checkout / "scratch.txt").write_text("x\n")
+
+    assert not evals.run._short_sha().endswith("-dirty")
+
+
+def test_without_a_git_checkout_the_sha_reads_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(evals.run, "ROOT", tmp_path)
+
+    assert evals.run._short_sha() == "unknown"
+
+
+class FakeLiveRun:
+    """Stands in for run_eval, so main() is driven end to end without a model call."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def __call__(
+        self,
+        cases,
+        agent,
+        *,
+        modes,
+        out_dir,
+        label,
+        verify_concurrency,
+        trials,
+        config,
+        verify_min_severity,
+        report,
+    ):
+        self.calls.append(
+            {
+                "cases": [c.name for c in cases],
+                "modes": modes,
+                "out_dir": out_dir,
+                "verify_concurrency": verify_concurrency,
+                "trials": trials,
+                "report": report,
+            }
+        )
+        self.config = config
+        self.verify_min_severity = verify_min_severity
+        out_dir.mkdir(parents=True, exist_ok=True)
+        paths = ResultPaths(json=out_dir / f"{label}.json", markdown=out_dir / f"{label}.md")
+        paths.markdown.write_text("| Mode | Precision |\n", encoding="utf-8")
+        return paths
+
+
+@pytest.fixture
+def live_run(monkeypatch: pytest.MonkeyPatch) -> FakeLiveRun:
+    fake = FakeLiveRun()
+    monkeypatch.setattr(evals.run, "run_eval", fake)
+    monkeypatch.setattr(evals.run, "_short_sha", lambda: "abc1234")
+    monkeypatch.setattr(argus.agent.review, "SdkReviewAgent", lambda settings: object())
+    return fake
+
+
+def test_an_unknown_mode_is_a_bad_parameter(live_run: FakeLiveRun) -> None:
+    result = CliRunner().invoke(evals.run.app, ["--mode", "fast"])
+
+    assert result.exit_code == 2
+    assert "Invalid value for --mode" in result.output
+    assert "unknown mode 'fast'" in result.output
+    assert live_run.calls == []
+
+
+def test_an_unknown_case_is_a_bad_parameter(live_run: FakeLiveRun) -> None:
+    result = CliRunner().invoke(evals.run.app, ["--case", "sqli", "--case", "nope"])
+
+    assert result.exit_code == 2
+    assert "Invalid value for --case" in result.output
+    assert "no such case 'nope'" in result.output
+    assert live_run.calls == []
+
+
+def test_main_writes_under_out_and_echoes_the_table(
+    live_run: FakeLiveRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARGUS_VERIFY_CONCURRENCY", "7")
+    out = tmp_path / "record"
+
+    result = CliRunner().invoke(
+        evals.run.app, ["--mode", "verify", "--case", "sqli", "--out", str(out)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert live_run.calls == [
+        {
+            "cases": ["sqli"],
+            "modes": ["verify"],
+            "out_dir": out,
+            "verify_concurrency": 7,
+            "trials": 1,
+            "report": None,
+        }
+    ]
+    assert result.stdout == "| Mode | Precision |\n"
+
+
+def test_main_defaults_to_every_mode_and_every_case(live_run: FakeLiveRun, tmp_path: Path) -> None:
+    result = CliRunner().invoke(evals.run.app, ["--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    (call,) = live_run.calls
+    assert call["modes"] == ["verify", "no-verify"]
+    assert call["cases"] == [c.name for c in load_cases()]
+
+
+def test_each_trial_runs_every_case_and_is_recorded(tmp_path: Path) -> None:
+    agent = OracleAgent()
+    cases = [CASES["sqli"], CASES["clean_docs_only"]]
+
+    paths = asyncio.run(
+        run_eval(cases, agent, modes=["no-verify"], out_dir=tmp_path, label="l", trials=3)
+    )
+
+    assert len(agent.roots) == 6
+    record = json.loads(paths.json.read_text())
+    entries = record["modes"]["no-verify"]["cases"]
+    assert [(e["score"]["case"], e["score"]["trial"]) for e in entries] == [
+        ("sqli", 1),
+        ("clean_docs_only", 1),
+        ("sqli", 2),
+        ("clean_docs_only", 2),
+        ("sqli", 3),
+        ("clean_docs_only", 3),
+    ]
+    assert record["trials"] == 3
+    assert record["modes"]["no-verify"]["summary"]["true_positives"] == 3
+
+
+def test_a_case_with_its_own_diff_cap_is_reviewed_under_it(tmp_path: Path) -> None:
+    agent = OracleAgent()
+    case = CASES["truncated_diff_bug"]
+
+    run(agent, ["truncated_diff_bug"], ["no-verify"], tmp_path)
+
+    assert case.diff_size_cap is not None
+    assert agent.truncated == [[case.expected[0].file]]
+
+
+def test_main_passes_trials_through(live_run, tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        evals.run.app, ["--out", str(tmp_path), "--case", "sqli", "--trials", "2"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert live_run.calls[0]["trials"] == 2
+
+
+def test_main_runs_the_smoke_subset_and_leaves_the_report_alone(
+    live_run: FakeLiveRun, tmp_path: Path
+) -> None:
+    result = CliRunner().invoke(evals.run.app, ["--smoke", "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    (call,) = live_run.calls
+    assert call["cases"] == sorted(load_thresholds().smoke)
+    assert call["report"] is None
+
+
+def test_smoke_and_case_together_are_a_bad_parameter(live_run: FakeLiveRun) -> None:
+    result = CliRunner().invoke(evals.run.app, ["--smoke", "--case", "sqli"])
+
+    assert result.exit_code == 2
+    assert live_run.calls == []
+
+
+def test_a_full_corpus_run_regenerates_the_report_and_records_the_config(
+    live_run: FakeLiveRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARGUS_VERIFY_MIN_SEVERITY", "medium")
+
+    result = CliRunner().invoke(evals.run.app, ["--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert live_run.calls[0]["report"] == REPORT_PATH
+    assert live_run.config.prompts_sha
+    assert live_run.verify_min_severity == "medium"
+
+
+def test_a_run_given_a_report_path_writes_the_report_and_the_config(tmp_path: Path) -> None:
+    config = Settings(_env_file=None).run_config("p" * 12)
+    report = tmp_path / "report.md"
+
+    paths = asyncio.run(
+        run_eval(
+            [CASES["sqli"]],
+            OracleAgent(),
+            modes=["verify"],
+            out_dir=tmp_path,
+            label="2026-11-02-abc1234",
+            config=config,
+            report=report,
+        )
+    )
+
+    record = json.loads(paths.json.read_text())
+    assert record["config"]["prompts_sha"] == "p" * 12
+    text = report.read_text()
+    assert text.startswith("# Argus eval report")
+    assert "2026-11-02-abc1234" in text
+    assert "## Specialists" in text
+
+
+def test_the_findings_below_the_verify_floor_are_reported_unverified(tmp_path: Path) -> None:
+    agent = OracleAgent()
+
+    asyncio.run(
+        run_eval(
+            [CASES["conventions_print_not_logger"]],  # a low-severity bug
+            agent,
+            modes=["verify"],
+            out_dir=tmp_path,
+            label="l",
+            verify_min_severity="medium",
+        )
+    )
+
+    assert agent.verified == []
+
+
+def test_smoke_reads_the_subset_from_the_thresholds_it_is_given(
+    live_run: FakeLiveRun, tmp_path: Path
+) -> None:
+    trusted = tmp_path / "thresholds.yaml"
+    trusted.write_text(
+        "smoke: [sqli, no_such_case]\nmax_extra_misses: 0\nmax_clean_control_gain: 0\n"
+    )
+
+    result = CliRunner().invoke(
+        evals.run.app, ["--smoke", "--thresholds", str(trusted), "--out", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert live_run.calls[0]["cases"] == ["sqli"]  # a case this branch lacks is skipped
+
+
+def test_main_runs_the_corpus_it_is_given(live_run: FakeLiveRun, tmp_path: Path) -> None:
+    corpus = tmp_path / "cases"
+    for name in ("alpha", "clean_beta"):
+        (corpus / name / "base").mkdir(parents=True)
+        (corpus / name / "seeded").mkdir()
+    (corpus / "alpha" / "expected.yaml").write_text(
+        "- {file: a.py, line_start: 1, line_end: 1, category: security, severity: high}\n"
+    )
+    (corpus / "clean_beta" / "expected.yaml").write_text("[]\n")
+
+    result = CliRunner().invoke(evals.run.app, ["--cases", str(corpus), "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert live_run.calls[0]["cases"] == ["alpha", "clean_beta"]
+    assert live_run.calls[0]["report"] is None  # another corpus never speaks for this one

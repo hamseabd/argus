@@ -1,0 +1,463 @@
+import json
+import subprocess
+from pathlib import Path
+
+import httpx
+import pytest
+import respx
+
+from argus.context.github import (
+    GitHubClient,
+    PostedReview,
+    parse_repo,
+    pr_context,
+    repo_from_remote,
+)
+from argus.domain.errors import GitHubError
+from argus.domain.models import ChangedFile
+
+API = "https://api.github.com"
+PR_JSON = {
+    "number": 7,
+    "title": "Add caching",
+    "body": "Caches lookups.",
+    "html_url": "https://github.com/o/r/pull/7",
+    "base": {"ref": "main"},
+    "head": {"ref": "feat/cache", "sha": "a" * 40},
+}
+DIFF = (
+    "diff --git a/app/cache.py b/app/cache.py\n--- a/app/cache.py\n+++ b/app/cache.py\n"
+    "@@ -1,2 +1,3 @@\n a\n+b\n c\n"
+)
+
+
+def client() -> GitHubClient:
+    return GitHubClient(token="t0k")
+
+
+@respx.mock
+def test_pr_info_maps_the_payload_and_sends_the_token() -> None:
+    route = respx.get(f"{API}/repos/o/r/pulls/7").mock(
+        return_value=httpx.Response(200, json=PR_JSON)
+    )
+
+    info = client().pr_info("o", "r", 7)
+
+    assert info.owner == "o" and info.repo == "r" and info.number == 7
+    assert info.title == "Add caching"
+    assert info.body == "Caches lookups."
+    assert info.base_ref == "main" and info.head_ref == "feat/cache"
+    assert info.head_sha == "a" * 40
+    assert info.html_url == "https://github.com/o/r/pull/7"
+    sent = route.calls.last.request
+    assert sent.headers["Authorization"] == "Bearer t0k"
+    assert sent.headers["Accept"] == "application/vnd.github+json"
+    assert sent.headers["X-GitHub-Api-Version"]
+
+
+@respx.mock
+def test_pr_info_with_a_null_body_is_an_empty_string() -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(
+        return_value=httpx.Response(200, json={**PR_JSON, "body": None})
+    )
+
+    assert client().pr_info("o", "r", 7).body == ""
+
+
+@respx.mock
+def test_pr_diff_asks_for_the_diff_media_type() -> None:
+    route = respx.get(f"{API}/repos/o/r/pulls/7").mock(return_value=httpx.Response(200, text=DIFF))
+
+    assert client().pr_diff("o", "r", 7) == DIFF
+    assert route.calls.last.request.headers["Accept"] == "application/vnd.github.diff"
+
+
+@respx.mock
+def test_pr_files_paginate_and_map_statuses() -> None:
+    page1 = [
+        {"filename": "a.py", "status": "added"},
+        {"filename": "b.py", "status": "modified"},
+        {"filename": "c.py", "status": "removed"},
+        {"filename": "d2.py", "status": "renamed", "previous_filename": "d.py"},
+    ]
+    page2 = [{"filename": "e.py", "status": "copied", "previous_filename": "e0.py"}]
+    route = respx.get(f"{API}/repos/o/r/pulls/7/files")
+    route.side_effect = [
+        httpx.Response(
+            200, json=page1, headers={"Link": f'<{API}/repos/o/r/pulls/7/files?page=2>; rel="next"'}
+        ),
+        httpx.Response(200, json=page2),
+    ]
+
+    files = client().pr_files("o", "r", 7)
+
+    assert files == [
+        ChangedFile(path="a.py", status="added"),
+        ChangedFile(path="b.py", status="modified"),
+        ChangedFile(path="c.py", status="removed"),
+        ChangedFile(path="d2.py", status="renamed", previous_path="d.py"),
+        ChangedFile(path="e.py", status="added", previous_path="e0.py"),
+    ]
+    assert route.call_count == 2
+    assert route.calls[0].request.url.params["per_page"] == "100"
+
+
+@respx.mock
+def test_post_review_sends_the_payload_and_returns_the_url() -> None:
+    route = respx.post(f"{API}/repos/o/r/pulls/7/reviews").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": 1, "html_url": "https://github.com/o/r/pull/7#pullrequestreview-1"},
+        )
+    )
+    payload = {"commit_id": "a" * 40, "event": "COMMENT", "body": "b", "comments": []}
+
+    posted = client().post_review("o", "r", 7, payload)
+
+    assert posted == PostedReview(id=1, url="https://github.com/o/r/pull/7#pullrequestreview-1")
+    assert route.calls.last.request.read() == httpx.Request("POST", "x", json=payload).read()
+
+
+@respx.mock
+def test_non_2xx_is_a_github_error_with_status_and_body() -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(
+        return_value=httpx.Response(422, json={"message": "Unprocessable Entity"})
+    )
+
+    with pytest.raises(GitHubError) as info:
+        client().pr_info("o", "r", 7)
+
+    assert info.value.status == 422
+    assert "Unprocessable" in info.value.body
+
+
+@respx.mock
+def test_transport_errors_are_github_errors_too() -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(side_effect=httpx.ConnectError("boom"))
+
+    with pytest.raises(GitHubError, match="boom"):
+        client().pr_info("o", "r", 7)
+
+
+@respx.mock
+def test_pr_context_assembles_diff_files_metadata_and_the_cap(tmp_path: Path) -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7", headers={"Accept": "application/vnd.github.diff"}).mock(
+        return_value=httpx.Response(200, text=DIFF)
+    )
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(return_value=httpx.Response(200, json=PR_JSON))
+    respx.get(f"{API}/repos/o/r/pulls/7/files").mock(
+        return_value=httpx.Response(200, json=[{"filename": "app/cache.py", "status": "modified"}])
+    )
+
+    ctx = pr_context(client(), "o", "r", 7, tmp_path)
+    capped = pr_context(client(), "o", "r", 7, tmp_path, max_bytes=10)
+
+    assert ctx.source == "pr"
+    assert ctx.repo_root == tmp_path
+    assert ctx.diff_text == DIFF
+    assert ctx.files == [ChangedFile(path="app/cache.py", status="modified")]
+    assert ctx.pr is not None and ctx.pr.head_sha == "a" * 40
+    assert ctx.truncated_files == []
+    assert capped.diff_text == ""
+    assert capped.truncated_files == ["app/cache.py"]
+
+
+def test_parse_repo_accepts_owner_slash_name_only() -> None:
+    assert parse_repo("hamseabd/argus") == ("hamseabd", "argus")
+    for bad in ("argus", "a/b/c", "", "/argus", "hamseabd/"):
+        with pytest.raises(ValueError):
+            parse_repo(bad)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/hamseabd/argus.git",
+        "https://github.com/hamseabd/argus",
+        "git@github.com:hamseabd/argus.git",
+        "ssh://git@github.com/hamseabd/argus.git",
+    ],
+)
+def test_repo_from_remote_reads_the_origin_url(tmp_path: Path, url: str) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "remote", "add", "origin", url], cwd=tmp_path, check=True)
+
+    assert repo_from_remote(tmp_path) == "hamseabd/argus"
+
+
+def test_repo_from_remote_is_none_without_a_github_origin(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    assert repo_from_remote(tmp_path) is None
+
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://gitlab.com/x/y.git"], cwd=tmp_path, check=True
+    )
+    assert repo_from_remote(tmp_path) is None
+
+
+LOCK_DIFF = (
+    "diff --git a/uv.lock b/uv.lock\n--- a/uv.lock\n+++ b/uv.lock\n@@ -1,2 +1,3 @@\n a\n+b\n c\n"
+)
+
+
+@respx.mock
+def test_pr_context_drops_ignored_files_from_the_diff_and_the_file_list(tmp_path: Path) -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7", headers={"Accept": "application/vnd.github.diff"}).mock(
+        return_value=httpx.Response(200, text=DIFF + LOCK_DIFF)
+    )
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(return_value=httpx.Response(200, json=PR_JSON))
+    respx.get(f"{API}/repos/o/r/pulls/7/files").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"filename": "app/cache.py", "status": "modified"},
+                {"filename": "uv.lock", "status": "modified"},
+            ],
+        )
+    )
+
+    ctx = pr_context(client(), "o", "r", 7, tmp_path, ignore=["*.lock"])
+
+    assert ctx.diff_text == DIFF
+    assert ctx.files == [ChangedFile(path="app/cache.py", status="modified")]
+    assert ctx.ignored_files == ["uv.lock"]
+
+
+@respx.mock
+def test_pr_reviews_and_review_comments_paginate() -> None:
+    reviews = respx.get(f"{API}/repos/o/r/pulls/7/reviews")
+    reviews.side_effect = [
+        httpx.Response(
+            200,
+            json=[{"id": 1, "body": "a"}],
+            headers={"Link": f'<{API}/repos/o/r/pulls/7/reviews?page=2>; rel="next"'},
+        ),
+        httpx.Response(200, json=[{"id": 2, "body": "b"}]),
+    ]
+    comments = respx.get(f"{API}/repos/o/r/pulls/7/comments").mock(
+        return_value=httpx.Response(200, json=[{"id": 9, "body": "c"}])
+    )
+
+    assert [r["id"] for r in client().pr_reviews("o", "r", 7)] == [1, 2]
+    assert [c["id"] for c in client().pr_review_comments("o", "r", 7)] == [9]
+    assert reviews.call_count == 2
+    assert comments.calls.last.request.url.params["per_page"] == "100"
+
+
+@respx.mock
+def test_repo_review_comments_page_through_the_repository_since_a_date() -> None:
+    route = respx.get(f"{API}/repos/o/r/pulls/comments")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            json=[{"id": 1}],
+            headers={"Link": f'<{API}/repos/o/r/pulls/comments?page=2>; rel="next"'},
+        ),
+        httpx.Response(200, json=[{"id": 2}]),
+    ]
+
+    comments = client().repo_review_comments("o", "r", since="2026-09-01T00:00:00Z")
+
+    assert [c["id"] for c in comments] == [1, 2]
+    params = route.calls[0].request.url.params
+    assert params["since"] == "2026-09-01T00:00:00Z"
+    assert (params["sort"], params["direction"], params["per_page"]) == ("created", "asc", "100")
+
+
+@respx.mock
+def test_create_check_run_posts_the_payload_and_returns_the_url() -> None:
+    route = respx.post(f"{API}/repos/o/r/check-runs").mock(
+        return_value=httpx.Response(201, json={"html_url": "https://github.com/o/r/runs/5"})
+    )
+    payload = {"name": "Argus", "head_sha": "a" * 40, "status": "completed"}
+
+    url = client().create_check_run("o", "r", payload)
+
+    assert url == "https://github.com/o/r/runs/5"
+    assert route.calls.last.request.read() == httpx.Request("POST", "x", json=payload).read()
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+@pytest.fixture
+def checkout(tmp_path: Path) -> tuple[Path, str, str]:
+    """A full-history checkout of a pull request: (root, base sha, head sha)."""
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "a@test")
+    _git(tmp_path, "config", "user.name", "a")
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "cache.py").write_text("a\nc\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+    _git(tmp_path, "checkout", "-q", "-b", "feat/cache")
+    (tmp_path / "app" / "cache.py").write_text("a\nb\nc\n")
+    _git(tmp_path, "commit", "-qam", "head")
+    return tmp_path, base, _git(tmp_path, "rev-parse", "HEAD")
+
+
+@respx.mock
+def test_a_diff_too_large_for_the_api_is_taken_from_the_checkout(checkout) -> None:
+    root, base, head = checkout
+    respx.get(f"{API}/repos/o/r/pulls/7", headers={"Accept": "application/vnd.github.diff"}).mock(
+        return_value=httpx.Response(406, json={"message": "Sorry, the diff exceeded the maximum"})
+    )
+    pr_json = {**PR_JSON, "base": {"ref": "main", "sha": base}, "head": {"ref": "f", "sha": head}}
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(return_value=httpx.Response(200, json=pr_json))
+    respx.get(f"{API}/repos/o/r/pulls/7/files").mock(
+        return_value=httpx.Response(200, json=[{"filename": "app/cache.py", "status": "modified"}])
+    )
+
+    ctx = pr_context(client(), "o", "r", 7, root)
+
+    assert "+b" in ctx.diff_text
+    assert ctx.diff_text.startswith("diff --git a/app/cache.py b/app/cache.py")
+    assert ctx.pr is not None and ctx.pr.base_sha == base
+
+
+@respx.mock
+def test_any_other_diff_failure_is_still_an_error(tmp_path: Path) -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7", headers={"Accept": "application/vnd.github.diff"}).mock(
+        return_value=httpx.Response(500, text="boom")
+    )
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(return_value=httpx.Response(200, json=PR_JSON))
+
+    with pytest.raises(GitHubError, match="500"):
+        pr_context(client(), "o", "r", 7, tmp_path)
+
+
+@respx.mock
+def test_a_406_with_no_base_commit_to_diff_from_is_still_the_api_error(tmp_path: Path) -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7", headers={"Accept": "application/vnd.github.diff"}).mock(
+        return_value=httpx.Response(406, text="too large")
+    )
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(return_value=httpx.Response(200, json=PR_JSON))
+
+    with pytest.raises(GitHubError, match="406") as info:
+        pr_context(client(), "o", "r", 7, tmp_path)
+
+    assert "checkout" not in str(info.value)
+
+
+@respx.mock
+def test_a_406_the_checkout_cannot_diff_names_both_failures(checkout) -> None:
+    root, _, head = checkout
+    respx.get(f"{API}/repos/o/r/pulls/7", headers={"Accept": "application/vnd.github.diff"}).mock(
+        return_value=httpx.Response(406, text="too large")
+    )
+    missing = {
+        **PR_JSON,
+        "base": {"ref": "main", "sha": "f" * 40},
+        "head": {"ref": "f", "sha": head},
+    }
+    respx.get(f"{API}/repos/o/r/pulls/7").mock(return_value=httpx.Response(200, json=missing))
+
+    with pytest.raises(GitHubError, match="406") as info:
+        pr_context(client(), "o", "r", 7, root)
+
+    assert "too large" in str(info.value)
+    assert "local checkout could not diff it either" in str(info.value)
+
+
+@respx.mock
+def test_review_comments_lists_one_reviews_inline_comments() -> None:
+    respx.get(f"{API}/repos/o/r/pulls/7/reviews/9/comments").mock(
+        return_value=httpx.Response(200, json=[{"id": 5, "body": "b"}])
+    )
+
+    assert client().review_comments("o", "r", 7, 9) == [{"id": 5, "body": "b"}]
+
+
+@respx.mock
+def test_update_review_body_puts_the_new_body() -> None:
+    route = respx.put(f"{API}/repos/o/r/pulls/7/reviews/9").mock(
+        return_value=httpx.Response(200, json={"id": 9})
+    )
+
+    client().update_review_body("o", "r", 7, 9, "new body")
+
+    assert json.loads(route.calls.last.request.read()) == {"body": "new body"}
+
+
+def threads_page(nodes: list[dict], *, next_cursor: str | None = None) -> dict:
+    return {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "pageInfo": {
+                            "hasNextPage": next_cursor is not None,
+                            "endCursor": next_cursor,
+                        },
+                        "nodes": nodes,
+                    }
+                }
+            }
+        }
+    }
+
+
+def thread(comment_id: int | None, *, resolved: bool, outdated: bool) -> dict:
+    comments = [] if comment_id is None else [{"databaseId": comment_id}]
+    return {"isResolved": resolved, "isOutdated": outdated, "comments": {"nodes": comments}}
+
+
+@respx.mock
+def test_review_threads_reads_resolution_and_outdated_across_pages() -> None:
+    route = respx.post(f"{API}/graphql").mock(
+        side_effect=[
+            httpx.Response(
+                200, json=threads_page([thread(5, resolved=True, outdated=False)], next_cursor="c1")
+            ),
+            httpx.Response(
+                200,
+                json=threads_page(
+                    [
+                        thread(6, resolved=False, outdated=True),
+                        thread(None, resolved=True, outdated=True),
+                    ]
+                ),
+            ),
+        ]
+    )
+
+    threads = client().review_threads("o", "r", 7)
+
+    assert threads == [
+        {"comment_id": 5, "resolved": True, "outdated": False},
+        {"comment_id": 6, "resolved": False, "outdated": True},
+    ]
+    second = json.loads(route.calls[1].request.read())
+    assert second["variables"] == {"owner": "o", "name": "r", "number": 7, "after": "c1"}
+
+
+@respx.mock
+def test_a_graphql_error_is_a_github_error() -> None:
+    respx.post(f"{API}/graphql").mock(
+        return_value=httpx.Response(200, json={"errors": [{"message": "Could not resolve"}]})
+    )
+
+    with pytest.raises(GitHubError, match="Could not resolve"):
+        client().review_threads("o", "r", 7)
+
+
+@respx.mock
+def test_review_comment_reads_one_comment() -> None:
+    respx.get(f"{API}/repos/o/r/pulls/comments/99").mock(
+        return_value=httpx.Response(200, json={"id": 99, "original_commit_id": "h"})
+    )
+
+    assert client().review_comment("o", "r", 99) == {"id": 99, "original_commit_id": "h"}
+
+
+@respx.mock
+def test_compare_reads_the_merge_base_and_the_files() -> None:
+    respx.get(f"{API}/repos/o/r/compare/b...h").mock(
+        return_value=httpx.Response(200, json={"merge_base_commit": {"sha": "m"}, "files": []})
+    )
+
+    assert client().compare("o", "r", "b", "h")["merge_base_commit"] == {"sha": "m"}

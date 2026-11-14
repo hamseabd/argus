@@ -1,0 +1,145 @@
+"""Local diff via git.
+
+Local mode reviews the branch the user is on: every commit since it forked
+from the base branch, plus whatever is staged or modified in the working
+tree. Untracked files are not included, because git diff does not see them
+and Argus never touches the index of the repository it reviews.
+"""
+
+import subprocess
+from collections.abc import Sequence
+from pathlib import Path
+
+from argus.context.diff import DIFF_SIZE_CAP, cap_diff, parse_diff, split_ignored
+from argus.domain.errors import GitError
+from argus.domain.models import Increment, ReviewContext
+
+DEFAULT_BASE = "main"
+
+
+def repo_root(path: Path) -> Path:
+    """The top-level directory of the repository containing path."""
+    return Path(run_git(path, "rev-parse", "--show-toplevel")).resolve()
+
+
+def head_sha(repo: Path) -> str:
+    return run_git(repo, "rev-parse", "HEAD")
+
+
+def local_diff(repo: Path, base: str = DEFAULT_BASE) -> str:
+    """Unified diff from the merge base with `base` to the working tree.
+
+    Diffing from the merge base rather than from `base` itself means commits
+    that landed on the base branch after the fork point do not show up as
+    changes under review. Rename detection is on so a moved file is one
+    section rather than a delete and an add.
+    """
+    merge_base = run_git(repo, "merge-base", "--end-of-options", base, "HEAD")
+    return _diff(repo, merge_base)
+
+
+def increment_since(
+    repo: Path,
+    since: str,
+    head: str,
+    max_bytes: int = DIFF_SIZE_CAP,
+    ignore: Sequence[str] = (),
+) -> Increment | None:
+    """What changed from `since` to `head`, or None when that is not a clean step forward.
+
+    `since` must be an ancestor of `head`, reached without a merge: after a
+    force-push, a merge of the base branch, or when the reviewed commit is not
+    in this clone, there is no clean increment and the caller reviews the
+    whole pull request instead.
+    """
+    try:
+        run_git(repo, "merge-base", "--is-ancestor", "--end-of-options", since, head)
+        merges = run_git(repo, "rev-list", "--merges", f"{since}..{head}")
+    except GitError:
+        return None
+    if merges:
+        # A merge (of the base, usually) brings in code the pull request did not
+        # write, and since..head would put all of it under review.
+        return None
+    files, _ = split_ignored(parse_diff(_diff(repo, since, head)), ignore)
+    diff_text, truncated = cap_diff(files, max_bytes)
+    return Increment(
+        since_sha=since,
+        diff_text=diff_text,
+        files=[f.to_changed_file() for f in files],
+        truncated_files=truncated,
+    )
+
+
+def diff_between(repo: Path, base: str, head: str) -> str:
+    """The diff a pull request shows: from the merge base of base and head, to head."""
+    merge_base = run_git(repo, "merge-base", "--end-of-options", base, head)
+    return _diff(repo, merge_base, head)
+
+
+def _diff(repo: Path, *revisions: str) -> str:
+    return run_git(
+        repo,
+        # Pin the output shape so a user's diff.noprefix, diff.mnemonicPrefix,
+        # or core.quotePath settings cannot change what the parser sees.
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "-M",
+        *revisions,
+        strip=False,
+    )
+
+
+def local_context(
+    path: Path,
+    base: str = DEFAULT_BASE,
+    max_bytes: int = DIFF_SIZE_CAP,
+    ignore: Sequence[str] = (),
+) -> ReviewContext:
+    """Build the review context for the repository containing path.
+
+    Files matching an ignore pattern leave the diff before the size cap is
+    applied, so a lockfile never pushes a source file out of the review.
+    """
+    root = repo_root(path)
+    files, ignored = split_ignored(parse_diff(local_diff(root, base)), ignore)
+    diff_text, truncated = cap_diff(files, max_bytes)
+    return ReviewContext(
+        source="local",
+        repo_root=root,
+        diff_text=diff_text,
+        files=[f.to_changed_file() for f in files],
+        truncated_files=truncated,
+        ignored_files=[f.path for f in ignored],
+    )
+
+
+def run_git(cwd: Path, *args: str, strip: bool = True) -> str:
+    """Run one git command and return its stdout; any failure is a GitError with git's message."""
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except OSError as exc:  # git missing or cwd unusable
+        raise GitError(f"could not run git {args[0]}: {exc}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or f"exit status {completed.returncode}"
+        raise GitError(f"git {_subcommand(args)} failed: {detail}")
+    return completed.stdout.strip() if strip else completed.stdout
+
+
+def _subcommand(args: tuple[str, ...]) -> str:
+    """The git verb in args, skipping any leading -c key=value pairs."""
+    i = 0
+    while i < len(args) and args[i] == "-c":
+        i += 2
+    return args[i] if i < len(args) else "?"

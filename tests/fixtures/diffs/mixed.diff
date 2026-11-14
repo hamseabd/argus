@@ -1,0 +1,54 @@
+diff --git a/img.bin b/img.bin
+index 0f49c4a..4c2de3c 100644
+Binary files a/img.bin and b/img.bin differ
+diff --git a/nonl.txt b/nonl.txt
+index 20cbb4d..0ba6e66 100644
+--- a/nonl.txt
++++ b/nonl.txt
+@@ -1 +1 @@
+-no newline
+\ No newline at end of file
++no newline changed
+\ No newline at end of file
+diff --git a/pkg/gone.py b/pkg/gone.py
+deleted file mode 100644
+index 33194a0..0000000
+--- a/pkg/gone.py
++++ /dev/null
+@@ -1 +0,0 @@
+-old content
+diff --git a/pkg/module.py b/pkg/module.py
+index f696b4b..c324c3d 100644
+--- a/pkg/module.py
++++ b/pkg/module.py
+@@ -1,8 +1,9 @@
+ line1
+ line2
+-line3
++line3 changed
+ line4
+ line5
++inserted after line5
+ line6
+ line7
+ line8
+@@ -15,6 +16,6 @@ line14
+ line15
+ line16
+ line17
+-line18
++line18 changed
+ line19
+ line20
+diff --git a/pkg/new.py b/pkg/new.py
+new file mode 100644
+index 0000000..39963cd
+--- /dev/null
++++ b/pkg/new.py
+@@ -0,0 +1,2 @@
++brand new
++file
+diff --git a/pkg/old_name.py b/pkg/new_name.py
+similarity index 100%
+rename from pkg/old_name.py
+rename to pkg/new_name.py

@@ -1,0 +1,2 @@
+# the docstring documents a limit parameter the signature no longer has.
+- {file: app/search.py, line_start: 4, line_end: 10, category: maintainability, severity: low}

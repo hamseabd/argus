@@ -1,0 +1,212 @@
+"""Markdown rendering shared by the terminal report and the GitHub review."""
+
+import re
+from collections import Counter
+
+from argus.domain.models import (
+    SEVERITY_ORDER,
+    AgentMetrics,
+    Finding,
+    ReviewResult,
+    StageMetrics,
+    Verdict,
+    rank_findings,
+)
+
+VERIFY_STAGE_PREFIX = "verify:"
+
+
+def render_report(result: ReviewResult) -> str:
+    """The terminal report: summary, ranked findings, the rejected ones folded, metrics footer."""
+    verdicts = verdicts_by_finding(result)
+    parts = ["# Argus review", result.review.summary.strip(), render_counts(result.review.findings)]
+    parts.extend(
+        render_finding(f, verdict=verdicts.get(f.id)) for f in rank_findings(result.review.findings)
+    )
+    if rejected := render_rejected(result):
+        parts.append(rejected)
+    parts.append("---")
+    parts.append(render_footer(result))
+    return "\n\n".join(parts) + "\n"
+
+
+def render_counts(findings: list[Finding]) -> str:
+    """One line: how many findings are shown, by status, and how many were rejected."""
+    shown = rank_findings(findings)
+    rejected = sum(f.status == "rejected" for f in findings)
+    known = sum(f.status == "known" for f in findings)
+    counts = [
+        f"{n} {status}"
+        for status in ("confirmed", "unverified")
+        if (n := sum(f.status == status for f in shown))
+    ]
+    if rejected:
+        counts.append(f"{rejected} rejected by the verifier")
+    if known:
+        counts.append(f"{known} already reported on this pull request and not shown")
+    if not shown:
+        return "No findings." + "".join(f" {count}." for count in counts)
+    noun = "finding" if len(shown) == 1 else "findings"
+    return f"{len(shown)} {noun}: {', '.join(counts)}."
+
+
+def render_finding(finding: Finding, heading: str = "##", verdict: Verdict | None = None) -> str:
+    """A finding as a titled section with its location on the line below."""
+    lines = [
+        f"{heading} [{finding.severity.upper()}] {finding.title}",
+        "",
+        f"`{finding.location}` · {_meta(finding)}",
+        "",
+        *_details(finding, verdict),
+    ]
+    if finding.replacement is not None:
+        # A suggestion block works only on an inline comment; here it is shown as text.
+        span = finding.location.split(":", 1)[1]
+        noun = "lines" if "-" in span else "line"
+        lines += ["", f"**Replacement for {noun} {span}:**", "", code_block(finding.replacement)]
+    return "\n".join(lines)
+
+
+def finding_body(finding: Finding, verdict: Verdict | None = None) -> str:
+    """A finding as an inline comment body; the location is the comment's anchor."""
+    return "\n".join(
+        [
+            f"**[{finding.severity.upper()}] {finding.title}** · {_meta(finding)}",
+            "",
+            *_details(finding, verdict),
+        ]
+    )
+
+
+def code_block(text: str, info: str = "") -> str:
+    """text fenced longer than any backtick run inside it, so it cannot close its own block.
+
+    One trailing newline ends the last line and is dropped; any more are blank
+    lines and are kept.
+    """
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    body = text.removesuffix("\n")
+    return f"{fence}{info}\n{body}\n{fence}" if body else f"{fence}{info}\n{fence}"
+
+
+def verdicts_by_finding(result: ReviewResult) -> dict[str, Verdict]:
+    return {v.finding_id: v for v in result.verdicts}
+
+
+def render_rejected(result: ReviewResult) -> str | None:
+    """The findings the verifier rejected, folded, each with the verifier's reason.
+
+    Dropping them silently left no way to audit the verifier: a real bug it
+    talked itself out of would vanish. They are list items, not headings, so
+    nothing reads them back as findings that were reported.
+    """
+    rejected = sorted(
+        (f for f in result.review.findings if f.status == "rejected"),
+        key=lambda f: (SEVERITY_ORDER[f.severity], f.file, f.line),
+    )
+    if not rejected:
+        return None
+    verdicts = verdicts_by_finding(result)
+    noun = "finding" if len(rejected) == 1 else "findings"
+    lines = ["<details>", f"<summary>{len(rejected)} {noun} the verifier rejected</summary>", ""]
+    for f in rejected:
+        lines.append(
+            f"- **[{f.severity.upper()}] {f.title}** `{f.location}` · {f.category} "
+            f"· confidence {f.confidence:.2f}"
+        )
+        if (verdict := verdicts.get(f.id)) is not None:
+            lines.append(f"  Verifier ({verdict.confidence:.2f}): {_one_line(verdict.reasoning)}")
+    lines += ["", "</details>"]
+    return "\n".join(lines)
+
+
+def render_footer(result: ReviewResult) -> str:
+    metrics = result.metrics
+    cached = sum(m.cache_creation_input_tokens + m.cache_read_input_tokens for m in metrics)
+    total_input = sum(m.input_tokens for m in metrics) + cached
+    output = sum(m.output_tokens for m in metrics)
+    turns = sum(m.num_turns for m in metrics)
+    seconds = result.duration_ms / 1000
+    subagents = sum(m.subagents_run for m in metrics)
+    rejections = sum(m.output_rejections for m in metrics)
+    held = sum(m.answers_held for m in metrics)
+    recovered = sum(m.structured_output_recovered for m in metrics)
+    parts = [
+        f"Cost ${result.total_cost_usd:.2f}",
+        f"{total_input:,} input tokens ({cached:,} cached)",
+        f"{output:,} output tokens",
+        f"{turns} turns",
+        f"{seconds:.1f} s",
+        f"{subagents} subagents",
+    ]
+    if rejections:
+        parts.append(f"{rejections} schema rejection{'s' if rejections != 1 else ''}")
+    if held:
+        parts.append(f"{held} {plural(held, 'answer')} held")
+    if recovered:
+        parts.append(f"{plural(recovered, 'answer')} recovered")
+    parts.append(f"session {result.session_id}")
+    if result.config is not None:
+        parts.append(f"prompts {result.config.prompts_sha}")
+        parts.append(f"config {result.config.fingerprint}")
+    footer = " · ".join(parts)
+    review_stage = next((m for m in metrics if m.stage == "review"), None)
+    if review_stage and review_stage.agents:
+        footer += "\n\n" + render_agents(review_stage.agents)
+    verifiers = [m for m in metrics if m.stage.startswith(VERIFY_STAGE_PREFIX)]
+    if verifiers:
+        footer += "\n\n" + render_verifiers(verifiers)
+    return footer
+
+
+def render_agents(agents: list[AgentMetrics]) -> str:
+    """One line: what the lead and each specialist did during the review stage."""
+    return "Agents: " + " · ".join(_agent_summary(a) for a in agents)
+
+
+def render_verifiers(stages: list[StageMetrics]) -> str:
+    """One line: how many verifier queries ran, on which model and effort."""
+    runs = Counter(_model_label(m.model, m.effort) for m in stages)
+    return "Verifiers: " + " · ".join(
+        f"{n} {plural(n, 'run')} {label}".rstrip() for label, n in runs.items()
+    )
+
+
+def _model_label(model: str | None, effort: str | None) -> str:
+    """`(model, effort)` with whichever of the two is known, or nothing."""
+    known = [part for part in (model, effort) if part]
+    return f"({', '.join(known)})" if known else ""
+
+
+def _agent_summary(agent: AgentMetrics) -> str:
+    name = f"{agent.agent} {_model_label(agent.model, agent.effort)}".rstrip()
+    parts = [
+        f"{name} {agent.turns} {plural(agent.turns, 'turn')}",
+        f"{agent.tool_calls} {plural(agent.tool_calls, 'tool call')}",
+    ]
+    if agent.duration_ms:
+        parts.append(f"{agent.duration_ms / 1000:.1f} s")
+    return ", ".join(parts)
+
+
+def plural(count: int, noun: str) -> str:
+    return noun if count == 1 else noun + "s"
+
+
+def _meta(finding: Finding) -> str:
+    meta = f"{finding.category} · {finding.status} · confidence {finding.confidence:.2f}"
+    return meta + (f" · found by {finding.reported_by}" if finding.reported_by else "")
+
+
+def _details(finding: Finding, verdict: Verdict | None = None) -> list[str]:
+    lines = [finding.description.strip(), "", f"**Evidence:** {finding.evidence.strip()}"]
+    if finding.suggested_fix:
+        lines += ["", "**Suggested fix:**", "", "```", finding.suggested_fix.strip(), "```"]
+    if verdict is not None and verdict.verdict == "inconclusive":
+        lines += ["", f"**Verifier, inconclusive:** {_one_line(verdict.reasoning)}"]
+    return lines
+
+
+def _one_line(text: str) -> str:
+    return " ".join(text.split())

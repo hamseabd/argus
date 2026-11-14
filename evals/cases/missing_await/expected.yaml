@@ -1,0 +1,2 @@
+# mailer.send is a coroutine that is never awaited, so no email goes out but the order is marked notified.
+- {file: app/notify.py, line_start: 20, line_end: 20, category: correctness, severity: high}

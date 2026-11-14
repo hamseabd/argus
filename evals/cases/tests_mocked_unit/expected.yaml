@@ -1,0 +1,2 @@
+# a new test patches the very function it claims to test.
+- {file: tests/test_shipping.py, line_start: 11, line_end: 14, category: tests, severity: medium}

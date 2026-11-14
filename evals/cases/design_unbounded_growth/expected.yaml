@@ -1,0 +1,2 @@
+# every delivery id is kept forever in a module-level set.
+- {file: app/webhooks.py, line_start: 17, line_end: 24, category: design, severity: medium}

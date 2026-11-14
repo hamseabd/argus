@@ -1,0 +1,2 @@
+# the VAT rule is written out again instead of calling with_vat.
+- {file: app/invoice.py, line_start: 13, line_end: 15, category: maintainability, severity: low}

@@ -1,0 +1,191 @@
+name: argus-review
+
+# Argus reviews pull requests on its own repository. It runs when a PR is
+# opened or leaves draft, and on demand for a given PR number. It does not
+# run on every push (synchronize) so a busy branch neither burns quota nor
+# stacks duplicate reviews.
+#
+# Any repository can reuse it: call this file as a reusable workflow at a
+# pinned tag and pass the same three secrets (see the README). Argus is then
+# checked out from its own repository at that same pinned commit.
+#
+# Trust model: Argus itself is installed and run from a trusted ref, this
+# repository's default branch or the commit a calling repository pinned.
+# The pull request head is checked out into a separate directory that is
+# only read, never installed or executed, so a PR cannot run its own code
+# next to the subscription token. Pull requests from forks are skipped on
+# the pull_request event because GitHub gives them no secrets and a
+# read-only token; a maintainer can still review one on demand.
+#
+# Dependabot's pull requests are skipped for the same reason: GitHub gives
+# them no secrets either, so the token mint fails before the review runs and
+# the red check says nothing about the change. A maintainer can review one on
+# demand.
+#
+# Identity: the review is posted with an installation token for the Argus
+# GitHub App, minted just before the review step and revoked when the job
+# ends, so it appears under Argus's own name. The workflow's own token is
+# read-only. Argus's repository is private, so a second app token, read-only
+# and scoped to that repository alone, checks Argus out: the app must be
+# installed on Argus's repository as well as the caller.
+#
+# Tracing: with the optional LANGSMITH_API_KEY secret, the review is traced
+# to LangSmith over OTLP. The key reaches only the review step; GitHub masks
+# it in logs. Without it, nothing is exported.
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to review
+        required: true
+        type: number
+  workflow_call:
+    inputs:
+      pr:
+        description: Pull request number to review when the calling event is not a pull_request
+        required: false
+        type: number
+      fail-on:
+        description: >-
+          Gate merges on an "Argus" check run that fails at this severity or above
+          (critical, high, medium, low). The app then needs Checks read and write. Empty: no check run.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: Claude subscription token from `claude setup-token`
+        required: true
+      ARGUS_APP_ID:
+        description: App ID of the Argus GitHub App, which must be installed on the calling repository and on the one this workflow lives in
+        required: true
+      ARGUS_APP_PRIVATE_KEY:
+        description: Private key of the Argus GitHub App
+        required: true
+      LANGSMITH_API_KEY:
+        description: Optional LangSmith API key; when set, the review is traced to the "argus" project
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: argus-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+env:
+  PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+
+jobs:
+  review:
+    permissions:
+      contents: read
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.user.login != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    # A review of a small PR takes about five minutes; a stuck one must not hold
+    # the runner (and the quota window) for the six-hour default.
+    timeout-minutes: 30
+    steps:
+      # Argus's own repository is private, so the caller's token cannot check it
+      # out. The app reads it with a token of its own, scoped to that repository
+      # alone and to reading it, kept apart from the one that posts the review.
+      - name: Resolve the Argus repository
+        id: argus-repo
+        env:
+          ARGUS_REPOSITORY: ${{ job.workflow_repository }}
+        run: |
+          echo "owner=${ARGUS_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${ARGUS_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+      - name: Mint the Argus checkout token
+        id: argus-code
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.ARGUS_APP_ID }}
+          private-key: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
+          owner: ${{ steps.argus-repo.outputs.owner }}
+          repositories: ${{ steps.argus-repo.outputs.name }}
+          permission-contents: read
+      - name: Check out Argus (trusted)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # job.workflow_repository and job.workflow_sha describe this workflow file,
+          # not the caller's. In this repository that would be the pull request's
+          # own commit, so the default branch is used instead; called from another
+          # repository it is the commit the caller pinned, which is what we want.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ github.repository != job.workflow_repository && job.workflow_sha || github.event.repository.default_branch }}
+          token: ${{ steps.argus-code.outputs.token }}
+          persist-credentials: false
+      - name: Check out the pull request head (reviewed, never executed)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pr) }}
+          path: target
+          # Full history: the git_history tool asks which commits touched a line.
+          fetch-depth: 0
+          # The reviewers read this directory; no token may be left in its git config.
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: Mint the Argus app token
+        id: argus-app
+        if: inputs.fail-on == ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.ARGUS_APP_ID }}
+          private-key: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
+          # The token gets only what posting a review needs, whatever the app holds.
+          permission-pull-requests: write
+          permission-contents: read
+      # The same token plus Checks: write, for a caller that gates merges on the
+      # "Argus" check run. A separate step, because an app without that
+      # permission cannot mint a token that asks for it.
+      - name: Mint the Argus app token with checks
+        id: argus-app-checks
+        if: inputs.fail-on != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.ARGUS_APP_ID }}
+          private-key: ${{ secrets.ARGUS_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: read
+          permission-checks: write
+      - name: Review
+        working-directory: target
+        run: |
+          # Traces go to LangSmith only when its key is present; without it tracing stays off.
+          if [ -n "$LANGSMITH_API_KEY" ]; then
+            export OTEL_EXPORTER_OTLP_ENDPOINT=https://api.smith.langchain.com/otel
+            export OTEL_EXPORTER_OTLP_HEADERS="x-api-key=$LANGSMITH_API_KEY,Langsmith-Project=argus"
+          fi
+          # With a gate, the check run carries it and the job stays green.
+          gate=()
+          if [ -n "$FAIL_ON" ]; then gate=(--check --fail-on "$FAIL_ON"); fi
+          uv run --project "$GITHUB_WORKSPACE" argus review \
+            --pr "$PR_NUMBER" --post --json "$GITHUB_WORKSPACE/argus-review.json" "${gate[@]}"
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.argus-app.outputs.token || steps.argus-app-checks.outputs.token }}
+          ARGUS_LOG_FORMAT: json
+          # The login the minted token posts as; only its earlier reviews are
+          # read back as already-reported findings.
+          ARGUS_REVIEWER_LOGIN: ${{ steps.argus-app.outputs.app-slug || steps.argus-app-checks.outputs.app-slug }}[bot]
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          FAIL_ON: ${{ inputs.fail-on }}
+      - name: Keep the review record
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: argus-review
+          path: argus-review.json
+          if-no-files-found: ignore

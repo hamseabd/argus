@@ -1,0 +1,4 @@
+# range(start, end + 1) looks off by one, but the docstring and the caller make end inclusive.
+kind: verifier-trap
+traps:
+  - {file: app/sales.py, line_start: 13, line_end: 13, category: correctness}

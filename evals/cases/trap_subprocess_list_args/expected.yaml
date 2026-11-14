@@ -1,0 +1,4 @@
+# User input reaches subprocess.run, but as a list argv with no shell, after "--".
+kind: verifier-trap
+traps:
+  - {file: app/vcs.py, line_start: 20, line_end: 22, category: security}

@@ -1,0 +1,326 @@
+from argus.domain.models import (
+    AgentMetrics,
+    Finding,
+    Review,
+    ReviewResult,
+    RunConfig,
+    StageMetrics,
+    Verdict,
+)
+from argus.report.markdown import plural, render_report
+
+
+def result(findings: list[Finding], verdicts: list[Verdict] | None = None) -> ReviewResult:
+    return ReviewResult(
+        review=Review(
+            summary="Adds paging and a lookup. One real problem.",
+            files_reviewed=["a.py", "b.py"],
+            findings=findings,
+        ),
+        verdicts=verdicts or [],
+        metrics=[
+            StageMetrics(
+                stage="review",
+                model="claude-opus-5",
+                cost_usd=1.25,
+                input_tokens=1000,
+                output_tokens=200,
+                cache_creation_input_tokens=20000,
+                cache_read_input_tokens=5000,
+                num_turns=7,
+                duration_ms=61500,
+                subagents_run=3,
+            ),
+            StageMetrics(
+                stage="verify:security-1",
+                model="claude-sonnet-5",
+                cost_usd=0.25,
+                input_tokens=100,
+                output_tokens=50,
+                num_turns=3,
+                duration_ms=8500,
+            ),
+        ],
+        total_cost_usd=1.5,
+        duration_ms=70000,
+        session_id="sess-1",
+    )
+
+
+def test_footer_lists_each_agent_when_the_metrics_carry_them() -> None:
+    plain = result([])
+    agents = [
+        AgentMetrics(agent="lead", turns=4, tool_calls=1),
+        AgentMetrics(agent="security", turns=9, tool_calls=12, duration_ms=48200),
+        AgentMetrics(agent="quality", turns=15, tool_calls=21, duration_ms=61000),
+    ]
+    with_agents = plain.model_copy(
+        update={"metrics": [plain.metrics[0].model_copy(update={"agents": agents})]}
+    )
+
+    assert "Agents:" not in render_report(plain)
+    assert (
+        "\n\nAgents: lead 4 turns, 1 tool call · security 9 turns, 12 tool calls, 48.2 s · "
+        "quality 15 turns, 21 tool calls, 61.0 s"
+    ) in render_report(with_agents)  # its own paragraph, so no renderer folds it into the footer
+
+
+def test_footer_mentions_schema_rejections_only_when_there_were_any() -> None:
+    clean = result([])
+    noisy = clean.model_copy(
+        update={"metrics": [clean.metrics[0].model_copy(update={"output_rejections": 3})]}
+    )
+
+    assert "schema rejections" not in render_report(clean)
+    assert "· 3 schema rejections ·" in render_report(noisy)
+
+
+def test_footer_mentions_held_and_recovered_answers_only_when_there_were_any() -> None:
+    clean = result([])
+    held = clean.model_copy(
+        update={
+            "metrics": [
+                clean.metrics[0].model_copy(
+                    update={"answers_held": 2, "structured_output_recovered": True}
+                )
+            ]
+        }
+    )
+
+    assert "held" not in render_report(clean)
+    assert "recovered" not in render_report(clean)
+    assert "· 2 answers held · answer recovered ·" in render_report(held)
+
+
+def finding(**overrides) -> Finding:
+    base = dict(
+        id="security-1",
+        file="a.py",
+        line=8,
+        severity="critical",
+        category="security",
+        title="SQL built from user input",
+        description="The name is interpolated into the query.",
+        evidence="`f\"... WHERE name = '{name}'\"` on line 8.",
+        suggested_fix="Use a parameter:\nconn.execute(q, (name,))",
+        confidence=0.95,
+        status="confirmed",
+    )
+    return Finding(**{**base, **overrides})
+
+
+EXPECTED = """\
+# Argus review
+
+Adds paging and a lookup. One real problem.
+
+2 findings: 1 confirmed, 1 unverified, 1 rejected by the verifier.
+
+## [CRITICAL] SQL built from user input
+
+`a.py:8` · security · confirmed · confidence 0.95
+
+The name is interpolated into the query.
+
+**Evidence:** `f"... WHERE name = '{name}'"` on line 8.
+
+**Suggested fix:**
+
+```
+Use a parameter:
+conn.execute(q, (name,))
+```
+
+## [LOW] Unused helper
+
+`b.py:3-4` · maintainability · unverified · confidence 0.40
+
+Dead code.
+
+**Evidence:** Nothing calls it.
+
+<details>
+<summary>1 finding the verifier rejected</summary>
+
+- **[HIGH] Rejected one** `a.py:8` · correctness · confidence 0.95
+  Verifier (0.80): The guard on line 6 returns early for an empty name.
+
+</details>
+
+---
+
+Cost $1.50 · 26,100 input tokens (25,000 cached) · 250 output tokens · 10 turns · 70.0 s \
+· 3 subagents · session sess-1
+
+Verifiers: 1 run (claude-sonnet-5)
+"""
+
+
+def test_report_renders_ranked_findings_and_the_footer() -> None:
+    findings = [
+        finding(
+            id="maintainability-1",
+            file="b.py",
+            line=3,
+            end_line=4,
+            severity="low",
+            category="maintainability",
+            title="Unused helper",
+            description="Dead code.",
+            evidence="Nothing calls it.",
+            suggested_fix=None,
+            confidence=0.4,
+            status="unverified",
+        ),
+        finding(
+            id="correctness-1",
+            severity="high",
+            category="correctness",
+            title="Rejected one",
+            status="rejected",
+        ),
+        finding(),
+    ]
+
+    verdicts = [
+        Verdict(
+            finding_id="correctness-1",
+            verdict="rejected",
+            reasoning="The guard on line 6 returns early for an empty name.",
+            severity="medium",
+            confidence=0.8,
+        )
+    ]
+
+    assert render_report(result(findings, verdicts)) == EXPECTED
+
+
+def test_report_with_no_findings_says_so() -> None:
+    text = render_report(result([]))
+
+    assert "No findings." in text
+    assert "Cost $1.50" in text
+    assert "## " not in text
+
+
+def test_report_with_only_rejected_findings_says_so() -> None:
+    text = render_report(result([finding(status="rejected")]))
+
+    assert "No findings. 1 rejected by the verifier." in text
+
+
+def test_report_counts_do_not_mention_absent_categories() -> None:
+    text = render_report(result([finding()]))
+
+    assert "1 finding: 1 confirmed." in text
+    assert "rejected" not in text
+
+
+def test_footer_names_the_model_and_effort_of_each_agent_and_the_verifiers() -> None:
+    plain = result([])
+    agents = [
+        AgentMetrics(agent="lead", model="claude-opus-5-5", effort="high", turns=4, tool_calls=1),
+        AgentMetrics(agent="tests", model="claude-opus-5-5", effort="high", turns=9, tool_calls=2),
+    ]
+    review_stage = plain.metrics[0].model_copy(update={"agents": agents})
+    verify_stage = plain.metrics[1].model_copy(
+        update={"model": "claude-opus-5-5", "effort": "high"}
+    )
+    staged = plain.model_copy(update={"metrics": [review_stage, verify_stage, verify_stage]})
+
+    report = render_report(staged)
+
+    assert (
+        "Agents: lead (claude-opus-5-5, high) 4 turns, 1 tool call · "
+        "tests (claude-opus-5-5, high) 9 turns, 2 tool calls"
+    ) in report
+    assert "\n\nVerifiers: 2 runs (claude-opus-5-5, high)" in report
+
+
+def test_footer_leaves_out_what_an_agent_did_not_report() -> None:
+    agents = [AgentMetrics(agent="lead", model="claude-opus-5-5", turns=1)]
+    plain = result([])
+    staged = plain.model_copy(
+        update={"metrics": [plain.metrics[0].model_copy(update={"agents": agents})]}
+    )
+
+    report = render_report(staged)
+
+    assert "Agents: lead (claude-opus-5-5) 1 turn, 0 tool calls" in report
+    assert "Verifiers:" not in report
+
+
+def test_counts_say_how_many_findings_were_already_reported_and_hidden() -> None:
+    text = render_report(
+        result([finding(), finding().model_copy(update={"id": "security-2", "status": "known"})])
+    )
+
+    assert "1 finding: 1 confirmed, 1 already reported on this pull request and not shown." in text
+    assert "security-2" not in text
+
+
+def test_footer_names_the_prompts_and_config_digests_when_the_result_carries_them() -> None:
+    plain = result([])
+    config = RunConfig(
+        argus_version="0.1.0",
+        prompts_sha="0123456789ab",
+        lead_model="claude-opus-5",
+        lead_effort="high",
+        lead_max_turns=40,
+        lead_read_budget=10,
+        lead_max_budget_usd=3.0,
+        lead_max_answer_holds=3,
+        specialist_model="claude-sonnet-5",
+        specialist_effort="medium",
+        specialist_max_turns=25,
+        verifier_model="claude-sonnet-5",
+        verifier_effort="medium",
+        verifier_max_turns=10,
+        verifier_max_budget_usd=0.5,
+        verify_concurrency=4,
+        diff_size_cap=204800,
+    )
+    described = plain.model_copy(update={"config": config})
+
+    assert "prompts" not in render_report(plain)
+    assert (
+        f"· session sess-1 · prompts 0123456789ab · config {config.fingerprint}"
+        in render_report(described)
+    )
+
+
+def test_plural_is_shared_by_the_report_and_the_summary() -> None:
+    from argus.report import summary
+
+    assert plural(1, "turn") == "turn"
+    assert plural(2, "turn") == "turns"
+    assert summary.plural is plural
+
+
+def test_a_rejected_finding_without_a_verdict_is_still_listed() -> None:
+    text = render_report(result([finding(status="rejected")]))
+
+    assert "1 finding the verifier rejected" in text
+    assert "Verifier" not in text.split("<details>")[1].split("</details>")[0].split("\n- ")[1]
+
+
+def test_an_inconclusive_verification_says_so_on_the_finding() -> None:
+    verdicts = [
+        Verdict(
+            finding_id="security-1",
+            verdict="inconclusive",
+            reasoning="Whether name can be attacker-controlled depends on a caller elsewhere.",
+            severity="medium",
+            confidence=0.3,
+        )
+    ]
+
+    text = render_report(result([finding(status="unverified")], verdicts))
+
+    assert "**Verifier, inconclusive:** Whether name can be attacker-controlled" in text
+
+
+def test_a_finding_says_which_specialist_found_it() -> None:
+    text = render_report(result([finding(reported_by="security")]))
+
+    assert "confidence 0.95 · found by security" in text

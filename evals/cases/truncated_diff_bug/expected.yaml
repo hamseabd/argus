@@ -1,0 +1,2 @@
+# The type-hint pass drops average()'s empty-month guard: an empty month divides by zero.
+- {file: app/reports.py, line_start: 14, line_end: 16, category: correctness, severity: medium}

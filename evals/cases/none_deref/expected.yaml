@@ -1,0 +1,2 @@
+# lookup returns None for an unknown user_id, and profile.nickname then raises AttributeError.
+- {file: app/profiles.py, line_start: 19, line_end: 19, category: correctness, severity: medium}

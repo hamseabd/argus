@@ -1,0 +1,2 @@
+# the comment still says three attempts after the constant became five.
+- {file: app/fetch.py, line_start: 6, line_end: 6, category: maintainability, severity: low}

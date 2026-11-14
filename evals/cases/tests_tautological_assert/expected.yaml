@@ -1,0 +1,2 @@
+# a new test compares the function's result with itself, so it cannot fail.
+- {file: tests/test_discount.py, line_start: 8, line_end: 10, category: tests, severity: medium}

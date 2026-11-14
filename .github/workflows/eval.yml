@@ -1,0 +1,244 @@
+name: argus-eval
+
+# Scores Argus over the corpus in evals/cases: seeded bugs, clean controls,
+# and verifier traps, each agent on its own output (see evals/score.py).
+#
+# - A pull request that touches argus/ (the prompts live in argus/agent/prompts)
+#   or evals/ runs the smoke subset, about nine reviews, in verify mode. The
+#   table, against the baseline case for case, goes in one pull request comment
+#   that later runs update, and the gate job fails on a regression. Only the
+#   reviewer under test comes from the pull request: the smoke cases, the
+#   scorer, the gate, the baseline, and the thresholds come from the default
+#   branch, and the gate runs in a job of its own, so a change cannot loosen
+#   its own gate.
+# - Labelling a pull request `eval-full` runs the whole corpus the same way,
+#   once per labelling.
+# - workflow_dispatch runs the whole corpus in either mode or both, for a
+#   baseline or a comparison; it posts nothing.
+#
+# Fork pull requests never run: they get no secrets and must not spend the
+# subscription, and `pull_request` (never `pull_request_target`) keeps it so.
+# Every run is billed to the subscription through CLAUDE_CODE_OAUTH_TOKEN. The
+# record (every ReviewResult plus the tables) is kept as an artifact.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "argus/**"
+      - "evals/**"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Which pipeline modes to run
+        required: true
+        default: both
+        type: choice
+        options: [both, verify, no-verify]
+      trials:
+        description: Passes over the corpus per mode, to see the run-to-run spread
+        required: true
+        default: "1"
+        type: choice
+        options: ["1", "2", "3"]
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    # Same-repository pull requests only; a labelled event only for eval-full.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.action != 'labeled' || github.event.label.name == 'eval-full'))
+    permissions:
+      contents: read
+    concurrency:
+      # Per pull request and per kind: a push cancels only its own pull request's
+      # superseded smoke run, never another's and never an eval-full run.
+      # Dispatched runs each get their own group. Runs on different pull
+      # requests can overlap on the subscription; one that hits its limit errors,
+      # and an errored case fails the gate rather than passing.
+      group: >-
+        argus-eval-${{ github.event_name == 'pull_request' &&
+        format('pr-{0}-{1}', github.event.pull_request.number,
+        github.event.label.name == 'eval-full' && 'full' || 'smoke') || github.run_id }}
+      cancel-in-progress: >-
+        ${{ github.event_name == 'pull_request' && github.event.label.name != 'eval-full' }}
+    runs-on: ubuntu-latest
+    # About five minutes a review: the full corpus in both modes is over sixty
+    # reviews. Three trials of both modes would outlast GitHub's six-hour cap.
+    timeout-minutes: 360
+    steps:
+      - name: Refuse a run the timeout cannot hold
+        if: inputs.mode == 'both' && inputs.trials == '3'
+        run: |
+          echo "::error::Three trials of both modes outlast the six-hour cap; run one mode at a time."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The pull request's head, not its merge ref: the record and a baseline
+          # made from it name a commit that still exists after the merge.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Check out the default branch's smoke cases
+        # The cases and thresholds the smoke run reviews come from a branch the
+        # pull request cannot change.
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted
+          persist-credentials: false
+      - name: Choose the smoke cases
+        if: github.event_name == 'pull_request'
+        # The branch's own only while the default branch has no smoke subset yet.
+        run: |
+          if [ -f .trusted/evals/thresholds.yaml ]; then
+            echo "SMOKE_FROM=$GITHUB_WORKSPACE/.trusted" >> "$GITHUB_ENV"
+          else
+            echo "SMOKE_FROM=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          fi
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: Evaluate
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            args=(--trials "$EVAL_TRIALS")
+            if [ "$EVAL_MODE" != both ]; then args+=(--mode "$EVAL_MODE"); fi
+          elif [ "$LABEL" = eval-full ]; then
+            args=(--mode verify)
+          else
+            args=(--mode verify --smoke --thresholds "$SMOKE_FROM/evals/thresholds.yaml"
+              --cases "$SMOKE_FROM/evals/cases")
+          fi
+          uv run python -m evals.run "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ARGUS_LOG_FORMAT: json
+          EVENT: ${{ github.event_name }}
+          LABEL: ${{ github.event.label.name }}
+          EVAL_MODE: ${{ inputs.mode }}
+          EVAL_TRIALS: ${{ inputs.trials }}
+      - name: Keep the eval record
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: argus-eval
+          path: |
+            evals/results/
+            evals/report.md
+          if-no-files-found: ignore
+
+  gate:
+    # Its own job, so nothing the change ran can have touched it: it checks both
+    # branches out fresh and takes only the record from the eval job. The default
+    # branch's gate, scorer, corpus, baseline, and thresholds judge the record;
+    # the change's commit is read only for the list of cases it keeps.
+    needs: eval
+    if: >-
+      always() && github.event_name == 'pull_request' &&
+      (needs.eval.result == 'success' || needs.eval.result == 'failure')
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+      - name: Check out the change
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: change
+          persist-credentials: false
+      - name: Choose the gate
+        # The change's own only while the default branch has no gate: nothing to loosen yet.
+        run: |
+          if [ -f trusted/evals/gate.py ]; then
+            echo "GATE=$GITHUB_WORKSPACE/trusted" >> "$GITHUB_ENV"
+          else
+            echo "GATE=$GITHUB_WORKSPACE/change" >> "$GITHUB_ENV"
+          fi
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        # An eval that failed before writing its record leaves none; the gate says so.
+        continue-on-error: true
+        with:
+          name: argus-eval
+          path: record
+      - name: Compare with the baseline
+        run: |
+          set -o pipefail
+          mkdir -p out
+          record=$(ls "$GITHUB_WORKSPACE"/record/results/*.json 2>/dev/null | head -n 1)
+          if [ -z "$record" ]; then
+            printf '## Argus eval: FAIL, no record\n\nThe eval stopped before writing its record: %s\n' \
+              "$RUN_URL" > out/gate.md
+            exit 1
+          fi
+          if [ "$LABEL" = eval-full ]; then
+            kind=(--corpus "$GITHUB_WORKSPACE/change/evals/cases")
+          else
+            kind=(--smoke)
+          fi
+          cd "$GATE"
+          uv run --frozen python -m evals.gate check "$record" "${kind[@]}" \
+            | tee "$GITHUB_WORKSPACE/out/gate.md"
+        env:
+          LABEL: ${{ github.event.label.name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - name: Keep the gate's table
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: argus-eval-gate
+          path: out/gate.md
+          if-no-files-found: ignore
+
+  comment:
+    needs: gate
+    if: >-
+      always() && github.event_name == 'pull_request' &&
+      (needs.gate.result == 'success' || needs.gate.result == 'failure')
+    permissions:
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        # A gate that failed before writing its table leaves none; say so below.
+        continue-on-error: true
+        with:
+          name: argus-eval-gate
+          path: gate
+      - name: Post or update the table on the pull request
+        run: |
+          marker='<!-- argus:eval -->'
+          if [ -f gate/gate.md ]; then
+            { echo "$marker"; cat gate/gate.md; } > comment.md
+          else
+            printf '%s\n## Argus eval: no table\n\nThe gate stopped before writing one: %s\n' \
+              "$marker" "$RUN_URL" > comment.md
+          fi
+          existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" \
+            | tail -n 1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@comment.md > /dev/null
+          else
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@comment.md > /dev/null
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

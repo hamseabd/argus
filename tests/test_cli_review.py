@@ -1,0 +1,446 @@
+import json
+from contextlib import contextmanager
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from argus import cli, tracing
+from argus.domain.errors import AgentRunError
+from argus.domain.models import (
+    ChangedFile,
+    Finding,
+    RepoRules,
+    Review,
+    ReviewContext,
+    ReviewResult,
+    StageMetrics,
+)
+
+runner = CliRunner()
+
+
+def finding(severity: str, status: str = "confirmed") -> Finding:
+    return Finding(
+        id=f"{severity}-1",
+        file="a.py",
+        line=1,
+        severity=severity,
+        category="correctness",
+        title=f"{severity} problem",
+        description="d",
+        evidence="e",
+        confidence=0.9,
+        status=status,
+    )
+
+
+def fake_result(findings: list[Finding]) -> ReviewResult:
+    return ReviewResult(
+        review=Review(summary="s", files_reviewed=["a.py"], findings=findings),
+        verdicts=[],
+        metrics=[
+            StageMetrics(
+                stage="review",
+                model="m",
+                cost_usd=0.5,
+                input_tokens=1,
+                output_tokens=1,
+                num_turns=1,
+                duration_ms=1,
+                subagents_run=3,
+            )
+        ],
+        total_cost_usd=0.5,
+        session_id="sess",
+    )
+
+
+@pytest.fixture
+def stubbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Stub the context and pipeline; record what the command passed to them."""
+    calls: dict = {}
+
+    def fake_local_context(
+        path: Path, base: str = "main", max_bytes: int = 0, ignore: tuple[str, ...] = ()
+    ) -> ReviewContext:
+        calls["base"] = base
+        calls["max_bytes"] = max_bytes
+        calls["ignore"] = ignore
+        return ReviewContext(
+            source="local",
+            repo_root=tmp_path,
+            diff_text=calls.get("diff_text", "+x\n"),
+            files=calls.get("files", [ChangedFile(path="a.py", status="modified")]),
+            ignored_files=calls.get("ignored_files", []),
+        )
+
+    async def fake_run_review(
+        context,
+        agent,
+        *,
+        verify=True,
+        verify_concurrency=4,
+        run_id=None,
+        known=(),
+        config=None,
+        verify_min_severity="low",
+    ):
+        calls["context"] = context
+        calls["run_id"] = run_id
+        calls["context"] = context
+        calls["known"] = list(known)
+        calls["config"] = config
+        calls["verify"] = verify
+        calls["verify_concurrency"] = verify_concurrency
+        calls["agent"] = agent
+        if isinstance(calls.get("outcome"), Exception):
+            raise calls["outcome"]
+        return calls.get("outcome") or fake_result([])
+
+    def fake_rules_from_git(repo: Path, base: str) -> RepoRules:
+        calls["rules_base"] = base
+        return RepoRules(ref=base, files={"REVIEW.md": "rules"})
+
+    monkeypatch.setattr(cli, "local_context", fake_local_context)
+    monkeypatch.setattr(cli, "rules_from_git", fake_rules_from_git)
+    monkeypatch.setattr(cli, "run_review", fake_run_review)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    return calls
+
+
+def test_review_requires_a_mode() -> None:
+    result = runner.invoke(cli.app, ["review"])
+
+    assert result.exit_code != 0
+    assert "--diff" in result.output
+
+
+def test_diff_review_prints_the_report_and_exits_zero(stubbed: dict) -> None:
+    stubbed["outcome"] = fake_result([finding("low")])
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert "# Argus review" in result.output
+    assert "low problem" in result.output
+    assert stubbed["base"] == "main"
+    assert stubbed["verify"] is True
+
+
+def test_a_local_review_reads_the_rules_from_the_base(stubbed: dict) -> None:
+    result = runner.invoke(cli.app, ["review", "--diff", "--base", "develop"])
+
+    assert result.exit_code == 0, result.output
+    assert stubbed["rules_base"] == "develop"
+    assert stubbed["context"].review_rules == RepoRules(ref="develop", files={"REVIEW.md": "rules"})
+
+
+def test_base_no_verify_and_settings_reach_the_pipeline(stubbed: dict, monkeypatch) -> None:
+    monkeypatch.setenv("ARGUS_VERIFY_CONCURRENCY", "2")
+    monkeypatch.setenv("ARGUS_DIFF_SIZE_CAP", "1234")
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--base", "develop", "--no-verify"])
+
+    assert result.exit_code == 0, result.output
+    assert stubbed["base"] == "develop"
+    assert stubbed["verify"] is False
+    assert stubbed["verify_concurrency"] == 2
+    assert stubbed["max_bytes"] == 1234
+
+
+def test_json_artifact_is_written(stubbed: dict, tmp_path: Path) -> None:
+    stubbed["outcome"] = fake_result([finding("high")])
+    out = tmp_path / "out" / "argus-review.json"
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--json", str(out)])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(out.read_text())
+    assert data["review"]["findings"][0]["id"] == "high-1"
+    assert data["total_cost_usd"] == 0.5
+
+
+def test_fail_on_trips_for_confirmed_or_unverified_at_or_above_the_severity(stubbed: dict) -> None:
+    stubbed["outcome"] = fake_result([finding("medium", status="unverified")])
+
+    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "medium"]).exit_code == 3
+    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "high"]).exit_code == 0
+    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "low"]).exit_code == 3
+
+
+def test_fail_on_ignores_rejected_findings(stubbed: dict) -> None:
+    stubbed["outcome"] = fake_result([finding("critical", status="rejected")])
+
+    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "low"]).exit_code == 0
+
+
+def test_fail_on_rejects_unknown_severity(stubbed: dict) -> None:
+    result = runner.invoke(cli.app, ["review", "--diff", "--fail-on", "urgent"])
+
+    assert result.exit_code == 2  # Click's usage-error code, distinct from the gate's 3
+    assert "urgent" in result.output
+
+
+def test_gate_and_usage_exit_codes_differ() -> None:
+    assert cli.EXIT_GATE != cli.EXIT_USAGE
+
+
+def test_invalid_settings_fail_cleanly(stubbed: dict, monkeypatch) -> None:
+    monkeypatch.setenv("ARGUS_VERIFY_CONCURRENCY", "abc")
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 1
+    assert "verify_concurrency" in result.output
+    assert "Traceback" not in result.output
+    assert "agent" not in stubbed
+
+
+def test_every_log_event_carries_the_same_run_id(stubbed: dict, tmp_path: Path) -> None:
+    stubbed["outcome"] = fake_result([finding("low")])
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--json", str(tmp_path / "r.json")])
+
+    assert result.exit_code == 0, result.output
+    events = [json.loads(line) for line in result.stderr.splitlines() if line.startswith("{")]
+    assert "artifact_written" in [e["event"] for e in events]
+    assert len({e.get("run_id") for e in events}) == 1
+    assert None not in {e.get("run_id") for e in events}
+
+
+def test_agent_errors_exit_one_with_the_subtype_and_cost(stubbed: dict) -> None:
+    stubbed["outcome"] = AgentRunError("error_max_budget_usd", 3.0, "sess")
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 1
+    assert "error_max_budget_usd" in result.output
+    assert "3.00" in result.output
+
+
+def test_malformed_credential_fails_before_any_query(stubbed: dict, monkeypatch) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-api03-wrong-prefix-" + "a" * 60)
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 1
+    assert "sk-ant-oat" in result.output
+    assert "agent" not in stubbed
+
+
+def test_git_errors_exit_one(stubbed: dict, monkeypatch) -> None:
+    from argus.domain.errors import GitError
+
+    def broken(path, base="main", max_bytes=0, ignore=()):
+        raise GitError("git merge-base failed: fatal: Not a valid object name nope")
+
+    monkeypatch.setattr(cli, "local_context", broken)
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--base", "nope"])
+
+    assert result.exit_code == 1
+    assert "nope" in result.output
+
+
+def test_an_empty_diff_fails_before_any_query(stubbed: dict) -> None:
+    stubbed["diff_text"] = ""
+    stubbed["files"] = []
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 1
+    assert "nothing to review" in result.output
+    assert "agent" not in stubbed
+
+
+@pytest.fixture
+def sessions(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    events: list[str] = []
+
+    @contextmanager
+    def fake_session(environ=None):
+        events.append("in")
+        try:
+            yield False
+        finally:
+            events.append("out")
+
+    monkeypatch.setattr(tracing, "session", fake_session)
+    return events
+
+
+def test_the_review_runs_inside_a_tracing_session(stubbed: dict, sessions: list[str]) -> None:
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert sessions == ["in", "out"]
+
+
+def test_a_failed_review_still_closes_the_tracing_session(
+    stubbed: dict, sessions: list[str]
+) -> None:
+    stubbed["outcome"] = AgentRunError("error_max_budget_usd", 3.0, "sess")
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 1
+    assert sessions == ["in", "out"]
+
+
+def test_ignore_options_add_to_the_configured_patterns(stubbed: dict, monkeypatch) -> None:
+    monkeypatch.setenv("ARGUS_IGNORE_PATHS", "*.lock")
+
+    result = runner.invoke(
+        cli.app, ["review", "--diff", "--ignore", "vendor/", "--ignore", "*.snap"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert tuple(stubbed["ignore"]) == ("*.lock", "vendor/", "*.snap")
+
+
+def test_the_default_ignore_patterns_reach_the_context(stubbed: dict) -> None:
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert "*.min.js" in stubbed["ignore"]
+
+
+def test_a_diff_that_is_entirely_ignored_says_so(stubbed: dict) -> None:
+    stubbed["diff_text"] = ""
+    stubbed["files"] = []
+    stubbed["ignored_files"] = ["uv.lock"]
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 1
+    assert "nothing to review" in result.output
+    assert "uv.lock" in result.output
+    assert "agent" not in stubbed
+
+
+def test_local_mode_has_no_earlier_reviews_to_consult(stubbed: dict) -> None:
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert stubbed["known"] == []
+
+
+def test_fail_on_still_counts_findings_already_reported(stubbed: dict) -> None:
+    """Reported once before is not fixed; an open critical still fails the gate."""
+    stubbed["outcome"] = fake_result([finding("critical", status="known")])
+
+    assert runner.invoke(cli.app, ["review", "--diff", "--fail-on", "low"]).exit_code == 3
+
+
+def test_the_run_config_is_built_from_the_settings_and_handed_to_the_pipeline(
+    stubbed: dict, monkeypatch
+) -> None:
+    monkeypatch.setenv("ARGUS_LEAD_EFFORT", "low")
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    config = stubbed["config"]
+    assert config.lead_effort == "low"
+    assert len(config.prompts_sha) == 12
+
+
+def test_summary_is_appended_to_the_given_file(stubbed: dict, tmp_path: Path) -> None:
+    stubbed["outcome"] = fake_result([finding("high")])
+    summary = tmp_path / "step" / "summary.md"
+    summary.parent.mkdir()
+    summary.write_text("# earlier step\n")
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--summary", str(summary)])
+
+    assert result.exit_code == 0, result.output
+    text = summary.read_text()
+    assert text.startswith("# earlier step\n")
+    assert "## Argus review" in text
+    assert "high problem" in text
+
+
+def test_summary_starts_on_its_own_line_after_an_unterminated_earlier_step(
+    stubbed: dict, tmp_path: Path
+) -> None:
+    summary = tmp_path / "summary.md"
+    summary.write_text("earlier step without a newline")
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--summary", str(summary)])
+
+    assert result.exit_code == 0, result.output
+    assert "earlier step without a newline\n## Argus review\n" in summary.read_text()
+
+
+def test_summary_defaults_to_the_actions_step_summary_file(
+    stubbed: dict, tmp_path: Path, monkeypatch
+) -> None:
+    """In Actions the job page gets the summary without a flag, so the workflow needs none.
+
+    That matters for the dogfood run, which takes its workflow file from the
+    pull request but installs Argus from main.
+    """
+    summary = tmp_path / "step_summary"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert "## Argus review" in summary.read_text()
+
+
+def test_an_explicit_summary_path_wins_over_the_environment(
+    stubbed: dict, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "env"))
+    chosen = tmp_path / "chosen.md"
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--summary", str(chosen)])
+
+    assert result.exit_code == 0, result.output
+    assert "## Argus review" in chosen.read_text()
+    assert not (tmp_path / "env").exists()
+
+
+def test_no_summary_is_written_outside_actions_without_the_flag(
+    stubbed: dict, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    result = runner.invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_summary_is_written_even_when_the_severity_gate_trips(
+    stubbed: dict, tmp_path: Path
+) -> None:
+    stubbed["outcome"] = fake_result([finding("high")])
+    summary = tmp_path / "summary.md"
+
+    result = runner.invoke(
+        cli.app, ["review", "--diff", "--summary", str(summary), "--fail-on", "high"]
+    )
+
+    assert result.exit_code == cli.EXIT_GATE
+    assert "## Argus review" in summary.read_text()
+
+
+def test_local_review_reads_the_rules_from_the_base(stubbed: dict, monkeypatch) -> None:
+    asked: list = []
+
+    def fake_rules(repo, base):
+        asked.append(base)
+        return "Money is integer cents.\n"
+
+    monkeypatch.setattr(cli, "rules_from_git", fake_rules)
+
+    result = runner.invoke(cli.app, ["review", "--diff", "--base", "develop"])
+
+    assert result.exit_code == 0, result.output
+    assert asked == ["develop"]
+    assert stubbed["context"].review_rules == "Money is integer cents.\n"

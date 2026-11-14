@@ -1,0 +1,2 @@
+# one remote call per order where the store offers a batched get_many.
+- {file: app/reports.py, line_start: 18, line_end: 19, category: design, severity: medium}

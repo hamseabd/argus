@@ -1,0 +1,4 @@
+# A broad except Exception looks like a swallowed error, but it logs with context and re-raises.
+kind: verifier-trap
+traps:
+  - {file: app/profiles.py, line_start: 17, line_end: 19, category: correctness}
